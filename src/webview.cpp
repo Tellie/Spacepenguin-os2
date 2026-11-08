@@ -65,11 +65,20 @@ WebView::WebView(QWebEngineProfile *profile, QWidget *parent)
     // A page whose process died (a crash, or the system running out of memory) says
     // so, with a Reload button, instead of staying blank.
     connect(m_page, &QWebEnginePage::renderProcessTerminated, this,
-            [this](QWebEnginePage::RenderProcessTerminationStatus status, int) {
+            [this](QWebEnginePage::RenderProcessTerminationStatus status, int exitCode) {
                 if (status == QWebEnginePage::NormalTerminationStatus)
                     return;
                 const QUrl address = url();
+                // Shows up in the log (space.cmd), to tell a crash from a kill.
+                qWarning("SpacePenguin: page process ended (status %d, exit code %d) on %s",
+                         int(status), exitCode, qPrintable(address.toString()));
+#ifdef __OS2__
+                // On OS/2 a killed page process is rarely low memory: the browser
+                // stops a page that sent it a broken message. Say it crashed.
+                const bool outOfMemory = false;
+#else
                 const bool outOfMemory = status == QWebEnginePage::KilledTerminationStatus;
+#endif
                 QTimer::singleShot(0, this, [this, address, outOfMemory] {
                     setHtml(crashedPage(address, outOfMemory), address);
                 });
