@@ -2,6 +2,9 @@
 # Qt installed by install-deps.sh / install-deps.ps1
 .qt/
 /build*/
+# OS/2 build directories (e.g. 1520-683 for the Qt 6.8.3 build) and logs
+/1520-*/
+*.log
 build-*/
 cmake-build-*/
 out/
