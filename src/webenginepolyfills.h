@@ -277,6 +277,25 @@ inline QString polyfillScript()
       wrap(Element.prototype, 'closest');
       wrap(Element.prototype, 'webkitMatchesSelector');
     }
+
+    // --- Anubis bot check: use its pure-JS hashing worker ----------------------
+    // Anubis (e.g. on src.fedoraproject.org) hashes with crypto.subtle.digest in
+    // a secure context. Each call is a round trip to another thread, which on
+    // this QtWebEngine gives well under 1k hashes per second. Its pure-JS worker,
+    // which Anubis itself uses on Firefox, is much faster here.
+    if (typeof Worker === 'function') {
+      var OrigWorker = Worker;
+      var anubisWebCrypto = /(\/\.within\.website\/x\/cmd\/anubis\/static\/js\/worker\/sha256-)webcrypto(\.mjs)/;
+      var PatchedWorker = function Worker(url, options) {
+        if (!(this instanceof PatchedWorker)) return OrigWorker(url, options);
+        var target = String(url);
+        if (anubisWebCrypto.test(target)) target = target.replace(anubisWebCrypto, '$1purejs$2');
+        return new OrigWorker(target, options);
+      };
+      PatchedWorker.prototype = OrigWorker.prototype;
+      Object.setPrototypeOf(PatchedWorker, OrigWorker);
+      self.Worker = PatchedWorker;
+    }
   }
 
   polyfills();
