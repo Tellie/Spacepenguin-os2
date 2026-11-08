@@ -227,6 +227,13 @@ endif()
 
 set_target_properties(spacepenguin PROPERTIES OUTPUT_NAME "SpacePenguin")
 
+# SpacePenguin has no QML of its own, but QtWebEngine pulls in Qt Qml, whose
+# finalizer runs qmlimportscanner. On OS/2 that tool is not available, which
+# stops the configure step; with a shared Qt the scan is not needed anyway.
+if(CMAKE_SYSTEM_NAME STREQUAL "OS2")
+    set_target_properties(spacepenguin PROPERTIES QT_QML_MODULE_NO_IMPORT_SCAN TRUE)
+endif()
+
 if(WIN32)
     # Launch as a GUI application so no console window appears behind the browser,
     # and embed the icon and version information Explorer shows.
