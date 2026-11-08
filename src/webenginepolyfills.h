@@ -234,6 +234,49 @@ inline QString polyfillScript()
         return this.getClientRects().length > 0;
       });
     }
+
+    // --- The :modal pseudo-class (Chromium 105) ---------------------------------
+    // GitHub and others use selectors such as '[open]:not(:modal)'; Chromium 94
+    // throws a SyntaxError on them. Mark dialogs opened with showModal() and
+    // rewrite ':modal' to that marker in the selector APIs.
+    var modalSupported = true;
+    try { document.createDocumentFragment().querySelector(':modal'); } catch (e) { modalSupported = false; }
+    if (!modalSupported && typeof HTMLDialogElement !== 'undefined') {
+      var MARK = 'data-sp-modal';
+      var dialogProto = HTMLDialogElement.prototype;
+      var showModal = dialogProto.showModal;
+      dialogProto.showModal = function () {
+        var result = showModal.apply(this, arguments);
+        this.setAttribute(MARK, '');
+        var dialog = this;
+        this.addEventListener('close', function () { dialog.removeAttribute(MARK); }, { once: true });
+        return result;
+      };
+      var close = dialogProto.close;
+      dialogProto.close = function () {
+        this.removeAttribute(MARK);
+        return close.apply(this, arguments);
+      };
+      var rewrite = function (selector) {
+        return typeof selector === 'string' && selector.indexOf(':modal') >= 0
+          ? selector.replace(/:modal\b/g, '[' + MARK + ']') : selector;
+      };
+      var wrap = function (proto, name) {
+        var original = proto && proto[name];
+        if (typeof original !== 'function') return;
+        proto[name] = function (selector) {
+          arguments[0] = rewrite(selector);
+          return original.apply(this, arguments);
+        };
+      };
+      [Element.prototype, Document.prototype, DocumentFragment.prototype].forEach(function (proto) {
+        wrap(proto, 'querySelector');
+        wrap(proto, 'querySelectorAll');
+      });
+      wrap(Element.prototype, 'matches');
+      wrap(Element.prototype, 'closest');
+      wrap(Element.prototype, 'webkitMatchesSelector');
+    }
   }
 
   polyfills();
