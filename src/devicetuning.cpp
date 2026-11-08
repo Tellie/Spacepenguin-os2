@@ -76,6 +76,13 @@ DeviceTuning::Plan DeviceTuning::plan(const Facts &facts)
     plan.lowMemory = facts.lowMemoryOverride >= 0
         ? facts.lowMemoryOverride == 1
         : facts.memoryMiB > 0 && facts.memoryMiB <= LowMemoryLimitMiB;
+#ifdef __OS2__
+    // On OS/2 (QtWebEngine 6.2) low-end-device mode makes Chromium end page
+    // processes with SIGTERM while browsing ("This tab was stopped"). Only use
+    // it when asked for with SPACEPENGUIN_LOW_MEMORY=1.
+    if (facts.lowMemoryOverride < 0)
+        plan.lowMemory = false;
+#endif
 
     QStringList wanted;
     QStringList why;
