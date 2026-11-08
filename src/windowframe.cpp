@@ -26,7 +26,9 @@ namespace spacepenguin {
 
 bool WindowFrame::isSupported()
 {
-#ifdef Q_OS_MACOS
+    // OS/2: Presentation Manager does not give a frameless window the keyboard
+    // focus, and window masks are not supported there.
+#if defined(Q_OS_MACOS) || defined(__OS2__)
     return false;
 #else
     return true;

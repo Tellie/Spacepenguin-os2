@@ -722,6 +722,46 @@ bool AdBlocker::loadFiltersFromText(const QString &text)
     return true;
 }
 
+// Qt's ResourceType does not line up with RequestType (MainFrame is 0, which is
+// RequestType::Any), so a plain cast made every page load match rules of any
+// type, and a $script or $image rule for a site blocked the whole site.
+static RequestType requestTypeFor(QWebEngineUrlRequestInfo::ResourceType type)
+{
+    switch (type) {
+    case QWebEngineUrlRequestInfo::ResourceTypeMainFrame:
+    case QWebEngineUrlRequestInfo::ResourceTypeNavigationPreloadMainFrame:
+        return RequestType::Document;
+    case QWebEngineUrlRequestInfo::ResourceTypeSubFrame:
+    case QWebEngineUrlRequestInfo::ResourceTypeNavigationPreloadSubFrame:
+        return RequestType::SubDocument;
+    case QWebEngineUrlRequestInfo::ResourceTypeStylesheet:
+        return RequestType::Stylesheet;
+    case QWebEngineUrlRequestInfo::ResourceTypeScript:
+    case QWebEngineUrlRequestInfo::ResourceTypeWorker:
+    case QWebEngineUrlRequestInfo::ResourceTypeSharedWorker:
+    case QWebEngineUrlRequestInfo::ResourceTypeServiceWorker:
+        return RequestType::Script;
+    case QWebEngineUrlRequestInfo::ResourceTypeImage:
+    case QWebEngineUrlRequestInfo::ResourceTypeFavicon:
+        return RequestType::Image;
+    case QWebEngineUrlRequestInfo::ResourceTypeFontResource:
+        return RequestType::Font;
+    case QWebEngineUrlRequestInfo::ResourceTypeObject:
+    case QWebEngineUrlRequestInfo::ResourceTypePluginResource:
+        return RequestType::Object;
+    case QWebEngineUrlRequestInfo::ResourceTypeMedia:
+        return RequestType::Media;
+    case QWebEngineUrlRequestInfo::ResourceTypeXhr:
+        return RequestType::Xhr;
+    case QWebEngineUrlRequestInfo::ResourceTypePing:
+        return RequestType::Ping;
+    default:
+        // SubResource, Prefetch, CspReport, Unknown, and anything newer (such as
+        // WebSocket and Json in later Qt releases).
+        return RequestType::Other;
+    }
+}
+
 void AdBlocker::interceptRequest(QWebEngineUrlRequestInfo &info)
 {
     if (!m_enabled)
@@ -738,7 +778,7 @@ void AdBlocker::interceptRequest(QWebEngineUrlRequestInfo &info)
     if (isPausedFor(host))
         return;
 
-    const RequestType type = static_cast<RequestType>(static_cast<int>(info.resourceType()));
+    const RequestType type = requestTypeFor(info.resourceType());
     const QString documentHost = info.initiator().host();
 
     if (!wouldBlock(url, type, documentHost)) {

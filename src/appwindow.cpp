@@ -13,7 +13,7 @@
 #include <QSettings>
 #include <QShortcut>
 #include <QWebEngineFullScreenRequest>
-#include <QWebEnginePermission>
+#include "webenginecompat.h"
 
 namespace spacepenguin {
 namespace {
@@ -97,7 +97,7 @@ AppWindow::AppWindow(const WebApp &app, QWebEngineProfile *profile, TabOpener op
                     showNormal();
             });
     connect(m_view->page(), &QWebEnginePage::windowCloseRequested, this, &QWidget::close);
-    connect(m_view->page(), &QWebEnginePage::permissionRequested, this,
+    spcompat::onPermissionRequested(m_view->page(), this,
             [this](QWebEnginePermission permission) {
                 const QString site = SitePermissions::siteName(permission.origin());
                 const auto answer = QMessageBox::question(

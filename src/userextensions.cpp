@@ -417,7 +417,10 @@ void UserScripts::apply()
         else
             engineScript.setInjectionPoint(QWebEngineScript::Deferred);
         engineScript.setRunsOnSubFrames(!script.noFrames);
-        engineScript.setWorldId(QWebEngineScript::ApplicationWorld);
+        // @inject-into page (as in Violentmonkey): the page's own world, so the
+        // script can change what the page's scripts see. Otherwise isolated.
+        engineScript.setWorldId(script.pageWorld ? QWebEngineScript::MainWorld
+                                                 : QWebEngineScript::ApplicationWorld);
         engineScript.setSourceCode(buildInjectedSource(script, source));
         collection->insert(engineScript);
     }
@@ -439,6 +442,7 @@ UserScript UserScripts::parse(const QString &filePath, const QString &contents)
     script.version = metadataValue(contents, QStringLiteral("version"));
     script.description = metadataValue(contents, QStringLiteral("description"));
     script.noFrames = !metadataValues(contents, QStringLiteral("noframes")).isEmpty();
+    script.pageWorld = metadataValue(contents, QStringLiteral("inject-into")) == QLatin1String("page");
     return script;
 }
 

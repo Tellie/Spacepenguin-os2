@@ -28,6 +28,8 @@
 #include <QWebEngineProfile>
 #include <QWebEngineScript>
 #include <QWebEngineScriptCollection>
+#include "webenginecompat.h"
+#include "webenginepolyfills.h"
 
 namespace spacepenguin {
 namespace {
@@ -118,9 +120,7 @@ ProfileServices createProfileServices(QObject *parent, bool isPrivate, const QSt
     }
 
     // Answers to "allow this site to …?" are kept; in private windows only until they close.
-    services.profile->setPersistentPermissionsPolicy(
-        isPrivate ? QWebEngineProfile::PersistentPermissionsPolicy::StoreInMemory
-                  : QWebEngineProfile::PersistentPermissionsPolicy::StoreOnDisk);
+    spcompat::setPermissionsStoredOnDisk(services.profile, !isPrivate);
     services.profile->setNotificationPresenter(
         [](std::unique_ptr<QWebEngineNotification> notification) {
             Notifications::instance()->present(std::move(notification));
@@ -139,6 +139,21 @@ ProfileServices createProfileServices(QObject *parent, bool isPrivate, const QSt
         capture.setRunsOnSubFrames(false);
         services.profile->scripts()->insert(capture);
     }
+
+#if !SPACEPENGUIN_NEW_WEBENGINE_API
+    {
+        // Older QtWebEngine (OS/2: 6.2 / Chromium 94): add the JavaScript
+        // features newer sites expect. Main world, so the page sees them, and
+        // as a QWebEngineScript the site's Content-Security-Policy does not apply.
+        QWebEngineScript polyfills;
+        polyfills.setName(UserScripts::reservedPrefix() + QStringLiteral("compat-polyfills"));
+        polyfills.setSourceCode(spcompat::polyfillScript());
+        polyfills.setInjectionPoint(QWebEngineScript::DocumentCreation);
+        polyfills.setWorldId(QWebEngineScript::MainWorld);
+        polyfills.setRunsOnSubFrames(true);
+        services.profile->scripts()->insert(polyfills);
+    }
+#endif
 
     services.adBlocker = new AdBlocker(parent);
     services.profile->setUrlRequestInterceptor(services.adBlocker);

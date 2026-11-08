@@ -1,7 +1,7 @@
 #pragma once
 
 #include <QDialog>
-#include <QWebEnginePermission>
+#include "webenginecompat.h"
 
 class QTreeWidget;
 class QWebEngineProfile;

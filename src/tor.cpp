@@ -150,6 +150,9 @@ QString installHint()
 #elif defined(Q_OS_MACOS)
     return QCoreApplication::translate("Tor", "Install Tor with Homebrew (brew install tor), or open Tor "
                                               "Browser and leave it running.");
+#elif defined(__OS2__)
+    return QCoreApplication::translate("Tor", "Install Tor for OS/2 so that tor.exe is in your PATH, "
+                                              "or start tor.exe yourself and leave it running.");
 #else
     return QCoreApplication::translate("Tor", "Install Tor with your package manager (for example: sudo apt "
                                               "install tor), or open Tor Browser and leave it running.");

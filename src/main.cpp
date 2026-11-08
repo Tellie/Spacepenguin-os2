@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <QWebEngineUrlScheme>
+#include "webenginecompat.h"
 
 #include "appwindow.h"
 #include "browserwindow.h"
@@ -48,7 +49,7 @@ int main(int argc, char *argv[])
     QWebEngineUrlScheme startScheme(QByteArrayLiteral("sp"));
     startScheme.setSyntax(QWebEngineUrlScheme::Syntax::Host);
     // The store page asks sp://store/api/… for its data with fetch().
-    startScheme.setFlags(QWebEngineUrlScheme::SecureScheme | QWebEngineUrlScheme::FetchApiAllowed);
+    startScheme.setFlags(QWebEngineUrlScheme::SecureScheme | spcompat::fetchApiFlags());
     QWebEngineUrlScheme::registerScheme(startScheme);
 
     spacepenguin::StartupTrace::mark("sandbox and device checks done");

@@ -1,3 +1,10 @@
+// OS/2 API first, so the INCL_ choices are not lost to an earlier os2.h.
+#ifdef __OS2__
+#    define INCL_WIN
+#    define INCL_WINWORKPLACE
+#    include <os2.h>
+#endif
+
 #include "webapps.h"
 
 #include <QCoreApplication>
@@ -112,6 +119,23 @@ QString windowsArgument(const QString &argument)
     QString quoted = argument;
     quoted.replace(QLatin1Char('"'), QStringLiteral("\\\""));
     return QLatin1Char('"') + quoted + QLatin1Char('"');
+}
+#endif
+
+#ifdef __OS2__
+/** The Workplace Shell object ID of an app's desktop icon. */
+QByteArray objectId(const WebApp &app)
+{
+    return "<SPACEPENGUIN_APP_" + app.id.toUpper().toLatin1() + ">";
+}
+
+/** A value in a WPS setup string: ';' ends a setting, '^' escapes, ',' separates lists. */
+QString setupValue(QString value)
+{
+    value.replace(QLatin1Char('^'), QStringLiteral("^^"));
+    value.replace(QLatin1Char(';'), QStringLiteral("^;"));
+    value.replace(QLatin1Char(','), QStringLiteral("^,"));
+    return value;
 }
 #endif
 
@@ -397,6 +421,38 @@ bool WebApps::addLauncher(const WebApp &app, const QImage &icon, QString *error)
     plist.close();
     settings.setValue(launcherKey, bundle);
     return true;
+#elif defined(__OS2__)
+    // A program object on the desktop, like the ones the installer makes.
+    const QStringList command = launcherCommand();
+    QStringList parameters;
+    for (const QString &argument : command.mid(1))
+        parameters.append(argument.contains(QLatin1Char(' ')) ? QLatin1Char('"') + argument + QLatin1Char('"')
+                                                              : argument);
+    parameters.append(QStringLiteral("--app=") + app.id);
+    const QString exe = QDir::toNativeSeparators(command.constFirst());
+    QString setup = QStringLiteral("EXENAME=%1;PARAMETERS=%2;STARTUPDIR=%3;OBJECTID=%4;")
+                        .arg(setupValue(exe), setupValue(parameters.join(QLatin1Char(' '))),
+                             setupValue(QDir::toNativeSeparators(QFileInfo(command.constFirst()).absolutePath())),
+                             QString::fromLatin1(objectId(app)));
+    if (!icon.isNull()) {
+        const QString iconFile = QFileInfo(iconPath(app.id)).absolutePath() + QLatin1Char('/') + app.id
+            + QStringLiteral(".ico");
+        if (icon.scaled(64, 64, Qt::KeepAspectRatio, Qt::SmoothTransformation).save(iconFile, "ICO"))
+            setup += QStringLiteral("ICONFILE=%1;").arg(setupValue(QDir::toNativeSeparators(iconFile)));
+    }
+    QString title = app.name;
+    title.replace(QLatin1Char('\n'), QLatin1Char(' '));
+    const QByteArray titleBytes = title.toLocal8Bit();
+    const QByteArray setupBytes = setup.toLocal8Bit();
+    // PCSZ is unsigned char * unless OS2EMX_PLAIN_CHAR is set; the casts work either way.
+    if (WinCreateObject(reinterpret_cast<PCSZ>("WPProgram"), reinterpret_cast<PCSZ>(titleBytes.constData()),
+                        reinterpret_cast<PCSZ>(setupBytes.constData()), reinterpret_cast<PCSZ>("<WP_DESKTOP>"),
+                        CO_REPLACEIFEXISTS)
+        == NULLHANDLE) {
+        return fail(tr("Could not create the desktop icon for %1.").arg(app.name));
+    }
+    settings.setValue(launcherKey, QString::fromLatin1(objectId(app)));
+    return true;
 #else
     const QString folder = QStandardPaths::writableLocation(QStandardPaths::ApplicationsLocation);
     QDir().mkpath(folder);
@@ -420,6 +476,15 @@ void WebApps::removeLauncher(const WebApp &app)
         settings.value(kGroup + QLatin1Char('/') + app.id + QStringLiteral("/launcher")).toString();
     if (launcher.isEmpty())
         return;
+#ifdef __OS2__
+    if (launcher.startsWith(QLatin1Char('<'))) {
+        if (HOBJECT object = WinQueryObject(reinterpret_cast<PCSZ>(launcher.toLatin1().constData())))
+            WinDestroyObject(object);
+        QFile::remove(QFileInfo(iconPath(app.id)).absolutePath() + QLatin1Char('/') + app.id
+                      + QStringLiteral(".ico"));
+        return;
+    }
+#endif
     if (QFileInfo(launcher).isDir()) {
         // A macOS .app bundle, and only one this class made.
         if (launcher.endsWith(QLatin1String(".app"))

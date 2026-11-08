@@ -89,14 +89,14 @@ SitePermissionsDialog::SitePermissionsDialog(QWebEngineProfile *profile, QWidget
             [this, reset] { reset->setEnabled(!m_list->selectedItems().isEmpty()); });
     connect(reset, &QPushButton::clicked, this, [this] {
         for (QTreeWidgetItem *item : m_list->selectedItems()) {
-            m_profile->queryPermission(item->data(0, Qt::UserRole).toUrl(),
-                                       Type(item->data(1, Qt::UserRole).toInt()))
+            spcompat::queryPermission(m_profile, item->data(0, Qt::UserRole).toUrl(),
+                                      Type(item->data(1, Qt::UserRole).toInt()))
                 .reset();
         }
         rebuild();
     });
     connect(resetAll, &QPushButton::clicked, this, [this] {
-        for (const QWebEnginePermission &permission : m_profile->listAllPermissions())
+        for (const QWebEnginePermission &permission : spcompat::listAllPermissions(m_profile))
             permission.reset();
         rebuild();
     });
@@ -125,7 +125,7 @@ SitePermissionsDialog::SitePermissionsDialog(QWebEngineProfile *profile, QWidget
 void SitePermissionsDialog::rebuild()
 {
     m_list->clear();
-    for (const QWebEnginePermission &permission : m_profile->listAllPermissions()) {
+    for (const QWebEnginePermission &permission : spcompat::listAllPermissions(m_profile)) {
         if (permission.state() == QWebEnginePermission::State::Ask)
             continue;
         auto *item = new QTreeWidgetItem(m_list, {SitePermissions::siteName(permission.origin()),

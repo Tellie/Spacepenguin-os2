@@ -22,6 +22,7 @@ struct UserScript {
     QString version;
     QString description;
     bool noFrames = false;
+    bool pageWorld = false;      // @inject-into page: run in the page's own JavaScript world
     bool enabled = true;
 };
 

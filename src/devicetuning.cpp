@@ -1,3 +1,9 @@
+// OS/2 API first, so the INCL_ choices are not lost to an earlier os2.h.
+#ifdef __OS2__
+#    define INCL_DOSMISC
+#    include <os2.h>
+#endif
+
 #include "devicetuning.h"
 
 #include <QByteArray>
@@ -32,7 +38,12 @@ bool hasGpuRenderNode()
 
 qint64 physicalMemoryMiB()
 {
-#if defined(Q_OS_UNIX) && defined(_SC_PHYS_PAGES)
+#if defined(__OS2__)
+    // What OS/2 can use (below 4 GB); that is what Chromium has to live in.
+    ULONG bytes = 0;
+    if (DosQuerySysInfo(QSV_TOTPHYSMEM, QSV_TOTPHYSMEM, &bytes, sizeof(bytes)) == 0 && bytes > 0)
+        return qint64(bytes) / (1024 * 1024);
+#elif defined(Q_OS_UNIX) && defined(_SC_PHYS_PAGES)
     const long pages = sysconf(_SC_PHYS_PAGES);
     const long pageSize = sysconf(_SC_PAGESIZE);
     if (pages > 0 && pageSize > 0)

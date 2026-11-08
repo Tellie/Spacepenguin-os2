@@ -8,6 +8,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QWebEngineUrlRequestJob>
+#include "webenginecompat.h"
 
 namespace spacepenguin::LoginsPage {
 namespace {
@@ -29,7 +30,7 @@ void replyJson(QWebEngineUrlRequestJob *job, const QJsonValue &value)
 
 QJsonObject body(QWebEngineUrlRequestJob *job)
 {
-    QIODevice *device = job->requestBody();
+    QIODevice *device = spcompat::requestBody(job);
     if (!device)
         return {};
     if (!device->isOpen())

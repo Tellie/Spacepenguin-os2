@@ -95,7 +95,7 @@
 #include <QWebEngineHistory>
 #include <QWebEnginePage>
 #include <QWebEngineView>
-#include <QWebEnginePermission>
+#include "webenginecompat.h"
 #include <QWebEngineProfile>
 #include <QWebEngineScript>
 #include <QWebEngineProfile>
@@ -389,6 +389,10 @@ BrowserWindow::BrowserWindow(ProfileServices services, QWidget *parent)
 
 BrowserWindow::~BrowserWindow()
 {
+    // The tabs are destroyed after this body, while this window is already half
+    // gone; their destroyed() handlers (prompts, session save) must not run then.
+    for (WebView *view : findChildren<WebView *>())
+        view->disconnect(this);
     ServiceRegistry &shared = registry();
     if (m_tabBar)
         m_tabBar->disconnect(this);
@@ -863,7 +867,7 @@ QWidget *BrowserWindow::createNavigationBar()
             const QUrl origin = view->url().adjusted(QUrl::RemovePath | QUrl::RemoveQuery
                                                      | QUrl::RemoveFragment);
             bool first = true;
-            for (const QWebEnginePermission &permission : m_services.profile->listPermissionsForOrigin(origin)) {
+            for (const QWebEnginePermission &permission : spcompat::listPermissionsForOrigin(m_services.profile, origin)) {
                 if (permission.state() == QWebEnginePermission::State::Ask)
                     continue;
                 if (first)
@@ -2504,7 +2508,9 @@ void BrowserWindow::showExtensionPopup(const QUrl &url)
     popup->setAttribute(Qt::WA_DeleteOnClose);
     auto *layout = new QVBoxLayout(popup);
     layout->setContentsMargins(1, 1, 1, 1);
-    auto *view = new QWebEngineView(m_services.profile, popup);
+    // (QWebEngineView(profile, parent) exists only since QtWebEngine 6.4.)
+    auto *view = new QWebEngineView(popup);
+    view->setPage(new QWebEnginePage(m_services.profile, view));
     layout->addWidget(view);
     // Panels size themselves to their content, within reason.
     connect(view->page(), &QWebEnginePage::contentsSizeChanged, popup, [popup](const QSizeF &size) {
@@ -3391,7 +3397,7 @@ void BrowserWindow::connectView(WebView *view)
     connect(view->browserPage(), &BrowserPage::internalPageRequested, this,
             [this, view](const QUrl &url) { loadAboutPage(view, url.toString()); });
 
-    connect(view->page(), &QWebEnginePage::permissionRequested, this,
+    spcompat::onPermissionRequested(view->page(), this,
             [this, view](QWebEnginePermission permission) {
                 // Gamer: games take the mouse pointer without asking (Esc gives it back).
                 const Preferences *preferences = Preferences::instance();
@@ -3934,6 +3940,8 @@ void BrowserWindow::confirmAppInstall(const WebApp &app, const QImage &icon)
     const QString where = tr("the Start menu");
 #elif defined(Q_OS_MACOS)
     const QString where = tr("Applications");
+#elif defined(__OS2__)
+    const QString where = tr("the Desktop folder");
 #else
     const QString where = tr("your app menu");
 #endif
