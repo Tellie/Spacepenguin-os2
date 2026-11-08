@@ -1738,6 +1738,18 @@ void BrowserWindow::restoreSession()
     connect(qApp, &QCoreApplication::aboutToQuit, qApp,
             [] { QSettings().setValue(QStringLiteral("session/running"), false); },
             Qt::UniqueConnection);
+#ifdef __OS2__
+    // On OS/2 the process does not always get as far as aboutToQuit after the
+    // last window closes (QtWebEngine shutdown can hang or crash), so closing
+    // the last window already counts as a proper close.
+    connect(qApp, &QGuiApplication::lastWindowClosed, qApp,
+            [] {
+                QSettings settings;
+                settings.setValue(QStringLiteral("session/running"), false);
+                settings.sync();
+            },
+            Qt::UniqueConnection);
+#endif
 
     if (Preferences::instance()->restoreSession()) {
         if (!restoreTabs())
