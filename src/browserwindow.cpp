@@ -1735,21 +1735,26 @@ void BrowserWindow::restoreSession()
     // set at start, the last run ended without quitting (a crash, a power cut).
     const bool unclean = settings.value(QStringLiteral("session/running"), false).toBool();
     settings.setValue(QStringLiteral("session/running"), true);
-    connect(qApp, &QCoreApplication::aboutToQuit, qApp,
-            [] { QSettings().setValue(QStringLiteral("session/running"), false); },
-            Qt::UniqueConnection);
+    // Qt::UniqueConnection does not work with a lambda (Qt refuses the connection
+    // with "unique connections require a pointer to member function"), so the
+    // flag above was never cleared and every start reported an unclean close.
+    // Connect once per process instead.
+    static bool quitHooked = false;
+    if (!quitHooked) {
+        quitHooked = true;
+        const auto markClosed = [] {
+            QSettings settings;
+            settings.setValue(QStringLiteral("session/running"), false);
+            settings.sync();
+        };
+        connect(qApp, &QCoreApplication::aboutToQuit, qApp, markClosed);
 #ifdef __OS2__
-    // On OS/2 the process does not always get as far as aboutToQuit after the
-    // last window closes (QtWebEngine shutdown can hang or crash), so closing
-    // the last window already counts as a proper close.
-    connect(qApp, &QGuiApplication::lastWindowClosed, qApp,
-            [] {
-                QSettings settings;
-                settings.setValue(QStringLiteral("session/running"), false);
-                settings.sync();
-            },
-            Qt::UniqueConnection);
+        // On OS/2 the process does not always get as far as aboutToQuit after the
+        // last window closes, so closing the last window already counts as a
+        // proper close.
+        connect(qApp, &QGuiApplication::lastWindowClosed, qApp, markClosed);
 #endif
+    }
 
     if (Preferences::instance()->restoreSession()) {
         if (!restoreTabs())
