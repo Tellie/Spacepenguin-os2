@@ -290,6 +290,10 @@ inline QString polyfillScript()
         if (!(this instanceof PatchedWorker)) return OrigWorker(url, options);
         var target = String(url);
         if (anubisWebCrypto.test(target)) target = target.replace(anubisWebCrypto, '$1purejs$2');
+        // GitHub's Datadog RUM / session replay records every page change and
+        // compresses it in a worker: constant CPU load on this machine. Without
+        // its worker Datadog switches itself off ("failed to start").
+        if (/datadog-worker/.test(target)) throw new DOMException('Datadog worker disabled', 'SecurityError');
         return new OrigWorker(target, options);
       };
       PatchedWorker.prototype = OrigWorker.prototype;
