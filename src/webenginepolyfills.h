@@ -300,6 +300,108 @@ inline QString polyfillScript()
       Object.setPrototypeOf(PatchedWorker, OrigWorker);
       self.Worker = PatchedWorker;
     }
+
+    // --- CSS cascade layers (Chromium 99) ---------------------------------------
+    // Chromium 94 drops '@layer x { ... }' blocks completely. Sites whose CSS is
+    // in layers (GitHub's Primer) then show up without any styling. Load such
+    // stylesheets once more, unwrap the layers and add them as constructed
+    // stylesheets. (Rule order inside layers is kept; only the priority between
+    // layers is lost.)
+    var layersSupported = true;
+    try {
+      var probe = new CSSStyleSheet();
+      probe.replaceSync('@layer sp{a{color:red}}');
+      layersSupported = probe.cssRules.length > 0;
+    } catch (e) { /* no constructable stylesheets: leave it */ }
+    if (!layersSupported && 'adoptedStyleSheets' in Document.prototype) {
+    // Removes '@layer a, b;' statements and unwraps '@layer name { ... }' blocks,
+    // so browsers without cascade layers still see the rules inside them.
+    var unlayer = function (css) {
+      var out = '';
+      var stack = [];          // for each open '{': true if it is an unwrapped @layer block
+      var i = 0, n = css.length, start = 0;
+      var flush = function (end) { out += css.slice(start, end); };
+      while (i < n) {
+        var c = css.charCodeAt(i);
+        if (c === 47 && css.charCodeAt(i + 1) === 42) {            // /* comment */
+          var e = css.indexOf('*/', i + 2);
+          i = e < 0 ? n : e + 2;
+        } else if (c === 34 || c === 39) {                         // "string" or 'string'
+          for (i++; i < n; i++) {
+            var d = css.charCodeAt(i);
+            if (d === 92) { i++; continue; }
+            if (d === c) { i++; break; }
+          }
+        } else if (c === 64 && css.substr(i, 6).toLowerCase() === '@layer' &&
+                   !/[\w-]/.test(css.charAt(i + 6))) {
+          var j = i + 6;
+          while (j < n && css[j] !== '{' && css[j] !== ';' && css[j] !== '}') j++;
+          flush(i);
+          if (css[j] === '{') { stack.push(true); start = i = j + 1; }
+          else if (css[j] === ';') { start = i = j + 1; }
+          else { start = i = j; }
+        } else if (c === 123) {                                    // {
+          stack.push(false); i++;
+        } else if (c === 125) {                                    // }
+          if (stack.pop()) { flush(i); start = i + 1; }
+          i++;
+        } else {
+          i++;
+        }
+      }
+      flush(n);
+      return out;
+    };
+
+      var urlPattern = /url\(\s*(['"]?)([^'")]+)\1\s*\)/g;
+      var absolutize = function (css, base) {
+        return css.replace(urlPattern, function (m, quote, target) {
+          if (/^(data:|#|[a-z][a-z0-9+.-]*:)/i.test(target)) return m;
+          try { return 'url("' + new URL(target, base).href + '")'; } catch (e) { return m; }
+        });
+      };
+      var entries = [];   // { link, href, sheet }
+      var apply = function () {
+        entries = entries.filter(function (e) { return e.link.isConnected && e.link.href === e.href; });
+        entries.sort(function (a, b) {
+          return a.link.compareDocumentPosition(b.link) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1;
+        });
+        var ours = entries.map(function (e) { return e.sheet; });
+        var others = document.adoptedStyleSheets.filter(function (sheet) { return !sheet.__spUnlayered; });
+        document.adoptedStyleSheets = others.concat(ours);
+      };
+      var seen = new WeakMap();   // link -> href already handled
+      var handle = function (link) {
+        if (!/(^|\s)stylesheet(\s|$)/i.test(link.rel || '') || !link.href) return;
+        if (seen.get(link) === link.href) return;
+        var href = link.href;
+        seen.set(link, href);
+        fetch(href, { credentials: 'same-origin' })
+          .then(function (r) { return r.ok ? r.text() : ''; })
+          .then(function (text) {
+            if (!text || text.indexOf('@layer') < 0) return;
+            var sheet = new CSSStyleSheet({ media: link.media || '' });
+            sheet.__spUnlayered = true;
+            return sheet.replace(absolutize(unlayer(text), href)).then(function () {
+              entries.push({ link: link, href: href, sheet: sheet });
+              apply();
+              console.warn('SpacePenguin: applied @layer stylesheet without layers: ' + href);
+            });
+          })
+          .catch(function () { /* leave the page as it is */ });
+      };
+      var scan = function (root) {
+        if (root.nodeName === 'LINK') handle(root);
+        if (root.querySelectorAll) Array.prototype.forEach.call(root.querySelectorAll('link'), handle);
+      };
+      new MutationObserver(function (records) {
+        records.forEach(function (r) {
+          if (r.type === 'attributes') { if (r.target.nodeName === 'LINK') handle(r.target); apply(); }
+          else { Array.prototype.forEach.call(r.addedNodes, scan); if (r.removedNodes.length && entries.length) apply(); }
+        });
+      }).observe(document, { childList: true, subtree: true, attributes: true, attributeFilter: ['href', 'rel', 'media'] });
+      scan(document);
+    }
   }
 
   polyfills();
