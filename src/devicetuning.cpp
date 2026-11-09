@@ -101,6 +101,14 @@ DeviceTuning::Plan DeviceTuning::plan(const Facts &facts)
         why << QStringLiteral("software drawing (no GPU acceleration for Linux apps)");
     }
 
+#ifdef __OS2__
+    // Chromium gives every page process an empty temporary file to park strings
+    // in. LIBCx can only pass sockets between processes, so the page process
+    // never gets the file and the empty .org.chromium.Chromium.* files pile up
+    // in the temp folder.
+    wanted << QStringLiteral("--disable-features=ParkableStringsToDisk");
+#endif
+
     // Whatever the user passed wins: skip any switch they set themselves.
     QStringList userSwitches;
     for (const QString &flag : facts.userFlags.split(QLatin1Char(' '), Qt::SkipEmptyParts))
