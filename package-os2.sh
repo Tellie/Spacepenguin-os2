@@ -24,7 +24,7 @@ DIST_DIR="dist"
 APP_NAME="SpacePenguin"
 # Andere mappen op H: met DLL's (gcc-runtime, eigen libs). Deze gaan voor
 # LIBPATH, zodat bv. de gcc 15-runtime van H: wint van de RPM-versie op C:.
-EXTRA_DIRS="h:/usr/lib h:/usr/bin"
+EXTRA_DIRS="h:/usr/lib h:/usr/bin h:/extras/lib"
 # Plugin-mappen die mee moeten (bestaat er een niet, dan wordt hij overgeslagen)
 PLUGIN_DIRS="platforms imageformats iconengines styles tls networkinformation platforminputcontexts"
 # ---------------------------------------------------------------------------
