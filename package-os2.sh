@@ -114,11 +114,17 @@ EOF
 # ---- 3. DLL-afhankelijkheden van H: verzamelen ----
 say "DLL-afhankelijkheden zoeken"
 
-# Zoekpad: eerst Qt, dan EXTRA_DIRS, dan LIBPATH uit CONFIG.SYS
+# Zoekpad: Qt, EXTRA_DIRS, BEGINLIBPATH, LIBPATH uit CONFIG.SYS, ENDLIBPATH.
+# BEGIN-/ENDLIBPATH zijn geen gewone omgevingsvariabelen; CMD.EXE kent ze wel.
 SEARCH="$QT_PREFIX/bin;$QT_PREFIX/lib"
 for d in $EXTRA_DIRS; do SEARCH="$SEARCH;$d"; done
+BLP=`cmd /c echo %BEGINLIBPATH% 2>/dev/null | tr -d '\r'`
+ELP=`cmd /c echo %ENDLIBPATH% 2>/dev/null | tr -d '\r'`
+case "$BLP" in *%*) BLP="" ;; esac
+case "$ELP" in *%*) ELP="" ;; esac
+SEARCH="$SEARCH;$BLP"
 LIBPATH_SYS=`tr -d '\r' < c:/config.sys 2>/dev/null | sed -n 's/^[Ll][Ii][Bb][Pp][Aa][Tt][Hh]=//p' | head -1`
-SEARCH="$SEARCH;$LIBPATH_SYS"
+SEARCH="$SEARCH;$LIBPATH_SYS;$ELP"
 
 DEPS_PY="$DIST_DIR/lxdeps.py"
 cat > "$DEPS_PY" <<'PYEOF'
@@ -192,6 +198,14 @@ done
 ok "$N_H DLL's van H: meegenomen"
 N_C=`grep -c '^C ' "$DIST_DIR/deps.txt"`
 ok "$N_C DLL's van C: (RPM/systeem) - niet meegenomen"
+# Niet gevonden: alleen de modules in de OS/2-kernel horen zo te zijn
+MISSING=`sed -n 's/^? //p' "$DIST_DIR/deps.txt" | tr 'a-z' 'A-Z' | \
+    grep -v -x -e DOSCALLS -e NLS -e MSG -e QUECALLS -e SESMGR -e VIOCALLS \
+               -e KBDCALLS -e MOUCALLS -e MONCALLS`
+if [ -n "$MISSING" ]; then
+    warn "deze DLL's zijn niet gevonden - zet hun map in EXTRA_DIRS:"
+    for m in $MISSING; do echo "${C_YELLOW}    $m.DLL${C_RESET}"; done
+fi
 
 # ---- 4. Startscript en LEESMIJ ----
 say "Startscript en LEESMIJ.txt schrijven"
