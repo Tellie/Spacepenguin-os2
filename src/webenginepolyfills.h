@@ -342,6 +342,30 @@ inline QString polyfillScript()
       };
     }
 
+    // --- Copy to the clipboard on sp:// pages -----------------------------------
+    // QtWebEngine 6.2 refuses navigator.clipboard.writeText() there ("Could not
+    // copy" on sp://logins). Copying a selection with execCommand('copy') during
+    // the click still works, so try that first.
+    if (location.protocol === 'sp:' && navigator.clipboard) {
+      var nativeWrite = navigator.clipboard.writeText
+        ? navigator.clipboard.writeText.bind(navigator.clipboard) : null;
+      navigator.clipboard.writeText = function (text) {
+        var area = document.createElement('textarea');
+        area.value = String(text);
+        area.setAttribute('readonly', '');
+        area.style.cssText = 'position:fixed;top:-1000px;left:-1000px;opacity:0';
+        (document.body || document.documentElement).appendChild(area);
+        var focused = document.activeElement;
+        area.select();
+        var copied = false;
+        try { copied = document.execCommand('copy'); } catch (e) { copied = false; }
+        area.remove();
+        if (focused && focused.focus) focused.focus();
+        if (copied) return Promise.resolve();
+        return nativeWrite ? nativeWrite(text) : Promise.reject(new DOMException('Copy failed', 'NotAllowedError'));
+      };
+    }
+
     // --- CSS cascade layers (Chromium 99) ---------------------------------------
     // Chromium 94 drops '@layer x { ... }' blocks completely. Sites whose CSS is
     // in layers (GitHub's Primer) then show up without any styling. Load such
