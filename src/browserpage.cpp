@@ -89,8 +89,16 @@ BrowserPage::BrowserPage(QWebEngineProfile *profile, QObject *parent)
         }
         if (info.status() == QWebEngineLoadingInfo::LoadStartedStatus)
             return;
+#if __has_include(<QWebEnginePermission>)
+        const bool httpStatus = info.errorDomain() == QWebEngineLoadingInfo::HttpStatusCodeDomain;
+#else
+        // Older QtWebEngine (OS/2: 6.2) has no HttpStatusCodeDomain: an HTTP
+        // status (404, 500, ...) arrives as a positive error code, while network
+        // errors are negative.
+        const bool httpStatus = info.errorCode() > 0;
+#endif
         const bool failed = info.status() == QWebEngineLoadingInfo::LoadFailedStatus
-            && info.errorDomain() != QWebEngineLoadingInfo::HttpStatusCodeDomain
+            && !httpStatus
             && info.errorCode() != kNetErrorAborted && info.errorCode() != kNetErrorNameNotResolved;
         m_upgradedFrom.clear();
         if (failed)
