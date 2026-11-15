@@ -1,6 +1,7 @@
 #include "browserpage.h"
 
 #include "classroom.h"
+#include "httpsonly.h"
 #include "logins.h"
 #include "preferences.h"
 #include "roles.h"
@@ -9,6 +10,8 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QTimer>
+#include <QWebEngineHistory>
+#include <QWebEngineLoadingInfo>
 #include <QUrlQuery>
 
 #include <QWebEngineSettings>
@@ -19,6 +22,11 @@ namespace spacepenguin {
 namespace {
 
 constexpr qint64 kHoverGraceMs = 1500;
+// net::ERR_ABORTED: the load was replaced by another, or stopped.
+constexpr int kNetErrorAborted = -3;
+// net::ERR_NAME_NOT_RESOLVED: no such site at all; plain http would fail too,
+// so Chromium's own error page says it better than the HTTPS-only warning.
+constexpr int kNetErrorNameNotResolved = -105;
 
 } // namespace
 
@@ -64,6 +72,36 @@ BrowserPage::BrowserPage(QWebEngineProfile *profile, QObject *parent)
         m_hoveredLink.clear();
         emit internalPageRequested(target);
     });
+
+    // HTTPS-only mode: an upgraded address that cannot be reached over https gets
+    // the warning page instead of an error.
+    connect(this, &QWebEnginePage::loadingChanged, this, [this](const QWebEngineLoadingInfo &info) {
+        if (!m_upgradedFrom.isValid())
+            return;
+        // Only the https attempt counts: the http load it replaced ends too (aborted).
+        const QUrl insecure = m_upgradedFrom;
+        const bool attempt = info.url().scheme() == QLatin1String("https")
+            && info.url().host().compare(insecure.host(), Qt::CaseInsensitive) == 0;
+        if (!attempt) {
+            if (info.status() == QWebEngineLoadingInfo::LoadSucceededStatus)
+                m_upgradedFrom.clear(); // went somewhere else entirely
+            return;
+        }
+        if (info.status() == QWebEngineLoadingInfo::LoadStartedStatus)
+            return;
+        const bool failed = info.status() == QWebEngineLoadingInfo::LoadFailedStatus
+            && info.errorDomain() != QWebEngineLoadingInfo::HttpStatusCodeDomain
+            && info.errorCode() != kNetErrorAborted && info.errorCode() != kNetErrorNameNotResolved;
+        m_upgradedFrom.clear();
+        if (failed)
+            showHttpsWarning(insecure);
+    });
+}
+
+void BrowserPage::showHttpsWarning(const QUrl &insecureUrl)
+{
+    m_httpsWarningFor = insecureUrl;
+    QTimer::singleShot(0, this, [this, insecureUrl] { setHtml(HttpsOnly::warningPage(insecureUrl), insecureUrl); });
 }
 
 bool BrowserPage::isAboutPage(const QUrl &url)
@@ -88,13 +126,56 @@ bool BrowserPage::isAllowedScheme(const QString &scheme)
 
 bool BrowserPage::acceptNavigationRequest(const QUrl &url, NavigationType type, bool isMainFrame)
 {
-    // A class's blocked site stays out of other pages' frames too (embedded videos).
-    if (!isMainFrame)
+    if (!isMainFrame) {
+        // The browser's own pages (saved logins among them) stay out of websites'
+        // frames, where a site could trick people into clicking on them.
+        if (url.scheme().compare(QLatin1String("sp"), Qt::CaseInsensitive) == 0
+            && this->url().scheme().compare(QLatin1String("sp"), Qt::CaseInsensitive) != 0)
+            return false;
+        // A class's blocked site stays out of other pages' frames too (embedded videos).
         return !Classroom::instance()->blocks(url);
+    }
+
+    // HTTPS-only mode: the warning page's two links.
+    if (url.scheme() == QLatin1String("sp") && url.host() == HttpsOnly::kContinueHost
+        && url.path() == QLatin1String("/back")) {
+        if (m_httpsWarningFor.isValid() && this->url() == m_httpsWarningFor) {
+            // Past the failed https attempt too, to the page before this site.
+            const QString host = m_httpsWarningFor.host();
+            m_httpsWarningFor.clear();
+            const QList<QWebEngineHistoryItem> back = history()->backItems(history()->count());
+            for (auto it = back.crbegin(); it != back.crend(); ++it) {
+                if (it->url().host().compare(host, Qt::CaseInsensitive) != 0 && it->url().scheme() != QLatin1String("data")) {
+                    const QWebEngineHistoryItem item = *it;
+                    QTimer::singleShot(0, this, [this, item] { history()->goToItem(item); });
+                    return false;
+                }
+            }
+            QTimer::singleShot(0, this, [this] { setUrl(QUrl(QStringLiteral("sp://start/"))); });
+        }
+        return false;
+    }
+    if (url.scheme() == QLatin1String("sp") && url.host() == HttpsOnly::kContinueHost) {
+        if (m_httpsWarningFor.isValid() && this->url() == m_httpsWarningFor) {
+            const QUrl insecure = m_httpsWarningFor;
+            m_httpsWarningFor.clear();
+            HttpsOnly::allow(insecure.host());
+            QTimer::singleShot(0, this, [this, insecure] { setUrl(insecure); });
+        }
+        return false;
+    }
+    // Going anywhere else on the web retires the warning page's "Continue".
+    const bool web = url.scheme() == QLatin1String("http") || url.scheme() == QLatin1String("https");
+    if (web && url != m_httpsWarningFor)
+        m_httpsWarningFor.clear();
 
     // Student mode: "Ask to unblock" on a class's blocked page goes to the teacher.
     if (url.scheme() == QLatin1String("sp") && url.host() == QLatin1String("classroom")
         && url.path() == QLatin1String("/ask")) {
+        // Only from the blocked page itself: other pages must not send the
+        // teacher requests in the student's name.
+        if (!Classroom::instance()->blocks(this->url()))
+            return false;
         const QUrlQuery query(url);
         const QString site = query.queryItemValue(QStringLiteral("site"), QUrl::FullyDecoded);
         const QString note = query.queryItemValue(QStringLiteral("note"), QUrl::FullyDecoded).replace(QLatin1Char('+'), QLatin1Char(' '));
@@ -132,6 +213,19 @@ bool BrowserPage::acceptNavigationRequest(const QUrl &url, NavigationType type, 
         emit onionRequested(url);
         return false;
     }
+    // HTTPS-only mode: plain http is tried over https first. If that https
+    // address sends the page back to http, the site has no secure version.
+    if (preferences->httpsOnly() && url != m_httpsWarningFor && HttpsOnly::shouldUpgrade(url)) {
+        if (m_upgradedFrom.isValid() && m_upgradedFrom.host().compare(url.host(), Qt::CaseInsensitive) == 0) {
+            m_upgradedFrom.clear();
+            showHttpsWarning(url);
+            return false;
+        }
+        const QUrl secure = HttpsOnly::upgraded(url);
+        m_upgradedFrom = url;
+        QTimer::singleShot(0, this, [this, secure] { setUrl(secure); });
+        return false;
+    }
 
     const bool userInitiated = type == NavigationTypeLinkClicked
         || type == NavigationTypeFormSubmitted || type == NavigationTypeTyped;
@@ -157,7 +251,10 @@ void BrowserPage::javaScriptConsoleMessage(JavaScriptConsoleMessageLevel level,
         const QJsonObject login =
             QJsonDocument::fromJson(message.mid(LoginStore::captureToken().size()).toUtf8()).object();
         const QString password = login.value(QStringLiteral("p")).toString();
-        if (!password.isEmpty())
+        // Only for the page that sent it: had the tab already gone on to another
+        // site, the login would be kept, and later filled in, for the wrong one.
+        const QString origin = LoginStore::originOf(QUrl(login.value(QStringLiteral("o")).toString()));
+        if (!password.isEmpty() && !origin.isEmpty() && origin == LoginStore::originOf(url()))
             emit loginSubmitted(login.value(QStringLiteral("u")).toString(), password);
         return;
     }

@@ -45,7 +45,8 @@ jobs:
   desktop:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 75
+    # macOS runners can be three times slower on a busy day (a 22-minute build took 67).
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
@@ -110,8 +111,8 @@ jobs:
         run: |
           sudo apt-get install -y --no-install-recommends shellcheck
           shellcheck install.sh install-deps.sh build-*.sh .github/scripts/*.sh packaging/chromeos/*.sh tools/*.sh
-          desktop-file-validate packaging/linux/org.spacepenguin.SpacePenguin.desktop
-          appstreamcli validate --no-net build/org.spacepenguin.SpacePenguin.metainfo.xml
+          desktop-file-validate packaging/linux/io.github.developer1_vd.SpacePenguin.desktop
+          appstreamcli validate --no-net build/io.github.developer1_vd.SpacePenguin.metainfo.xml
 
       - name: Package AppImage
         if: runner.os == 'Linux'
@@ -141,7 +142,7 @@ jobs:
               set -e
               if command -v dnf >/dev/null; then dnf install -y -q sudo shadow-utils findutils >/dev/null
               elif command -v zypper >/dev/null; then zypper --non-interactive --quiet install sudo shadow findutils >/dev/null
-              else pacman -Sy --noconfirm --quiet sudo >/dev/null; fi
+              else pacman -Syu --noconfirm --quiet sudo >/dev/null; fi  # never a partial upgrade on Arch
               useradd -m student && echo "student ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/student
               sudo -iu student bash -c "bash /src/install.sh --yes /src/dist/*.AppImage"
               sudo -iu student env QT_QPA_PLATFORM=offscreen /home/student/.local/bin/spacepenguin --version | tee /dev/stderr | grep -q SpacePenguin'
@@ -306,19 +307,41 @@ jobs:
           nix develop -c sh -c 'cmake -B build-nix -G Ninja && cmake --build build-nix && QT_QPA_PLATFORM=offscreen ctest --test-dir build-nix --output-on-failure'
 
   flatpak:
-    name: Flatpak
-    runs-on: ubuntu-24.04
+    name: Flatpak (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
     container:
-      image: ghcr.io/flathub-infra/flatpak-github-actions:kde-6.8
+      image: ghcr.io/flathub-infra/flatpak-github-actions:kde-6.11
       options: --privileged
+    # The image's own Flatpak installation can be neither updated nor changed
+    # inside the container once Flathub has newer runtimes ("Invalid cross-device
+    # link": renames across the image's layers). A fresh one on the runner's disk
+    # gets the current runtimes from Flathub instead (FLATPAK_SYSTEM_DIR below;
+    # flatpak-builder installs what it needs system-wide).
     steps:
       - uses: actions/checkout@v4
+      - name: A fresh Flatpak installation, with Flathub
+        env:
+          FLATPAK_SYSTEM_DIR: ${{ runner.temp }}/flatpak
+        run: flatpak remote-add --system --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+      # The bundle carries Flathub as its runtime's source, so installing it fetches
+      # the KDE runtime too: flatpak install --user SpacePenguin-x86_64.flatpak
       - uses: flathub-infra/flatpak-github-actions/flatpak-builder@master
+        env:
+          FLATPAK_SYSTEM_DIR: ${{ runner.temp }}/flatpak
         with:
-          manifest-path: packaging/flatpak/org.spacepenguin.SpacePenguin.yml
-          bundle: SpacePenguin.flatpak
-          cache-key: flatpak-builder-${{ github.sha }}
+          manifest-path: packaging/flatpak/io.github.developer1_vd.SpacePenguin.yml
+          bundle: SpacePenguin-${{ matrix.arch }}.flatpak
+          arch: ${{ matrix.arch }}
+          cache-key: flatpak-builder-${{ matrix.arch }}-${{ github.sha }}
 
   mobile:
     name: ${{ matrix.name }}
@@ -386,8 +409,18 @@ jobs:
     runs-on: ubuntu-24.04
     permissions:
       contents: write
+    outputs:
+      tag: ${{ steps.name.outputs.tag }}
     steps:
-      # SpacePenguin.flatpak-<arch> as well as the SpacePenguin-<platform> sets.
+      # The changelog, for the release notes.
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            CHANGELOG.md
+            tools/release-notes.sh
+          sparse-checkout-cone-mode: false
+
+      # SpacePenguin-<arch>.flatpak-<arch> as well as the SpacePenguin-<platform> sets.
       - uses: actions/download-artifact@v4
         with:
           path: packages
@@ -433,6 +466,14 @@ jobs:
           fi
           echo "name=${name}" >> "${GITHUB_OUTPUT}"
 
+      # What is new, from CHANGELOG.md; GitHub's list of merged pull requests follows it.
+      - name: Release notes
+        env:
+          TAG: ${{ steps.name.outputs.tag }}
+        run: |
+          tools/release-notes.sh "${TAG}" CHANGELOG.md > release-notes.md
+          cat release-notes.md
+
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.name.outputs.tag }}
@@ -440,6 +481,7 @@ jobs:
           name: ${{ steps.name.outputs.name }}
           prerelease: ${{ steps.name.outputs.prerelease == 'true' }}
           files: packages/*
+          body_path: release-notes.md
           generate_release_notes: true
 
       # A tag deleted moments before (a replaced release) can leave the new
@@ -458,6 +500,65 @@ jobs:
             -f tag_name="${TAG}" -f target_commitish="${GITHUB_SHA}" \
             -F prerelease="${PRERELEASE}" -f make_latest="$([ "${PRERELEASE}" = true ] && echo false || echo true)" \
             --jq '"\(.html_url) draft=\(.draft)"'
+
+  # SpacePenguin's own Flatpak repository (packaging/flatpak/make-repo.sh): this
+  # release's two bundles, signed with the FLATPAK_GPG_PRIVATE_KEY secret,
+  # attached to the release as flatpak-repo.tar.gz. The pages workflow then
+  # publishes it under https://developer1-vd.github.io/SpacePenguin/flatpak/.
+  flatpak-repo:
+    name: Flatpak repository
+    needs: [release]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write   # to attach the repository to the release
+      actions: write    # to start the pages workflow
+    env:
+      FLATPAK_GPG_PRIVATE_KEY: ${{ secrets.FLATPAK_GPG_PRIVATE_KEY }}
+    steps:
+      - name: Without the signing key there is no repository
+        if: env.FLATPAK_GPG_PRIVATE_KEY == ''
+        run: echo "::notice::FLATPAK_GPG_PRIVATE_KEY is not set, so this release has no Flatpak repository."
+
+      - uses: actions/checkout@v4
+        if: env.FLATPAK_GPG_PRIVATE_KEY != ''
+
+      - uses: actions/download-artifact@v4
+        if: env.FLATPAK_GPG_PRIVATE_KEY != ''
+        with:
+          path: bundles
+          pattern: SpacePenguin-*.flatpak*
+          merge-multiple: true
+
+      - name: Build, sign, attach and publish
+        if: env.FLATPAK_GPG_PRIVATE_KEY != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.release.outputs.tag }}
+        run: |
+          sudo apt-get install -y -q --no-install-recommends flatpak ostree >/dev/null
+          export GNUPGHOME="$(mktemp -d)"
+          # The secret is the whole private key file, from "-----BEGIN PGP PRIVATE KEY
+          # BLOCK-----" to its END line. Say what is wrong with it, never what is in it.
+          secret="${FLATPAK_GPG_PRIVATE_KEY}"
+          if ! grep -q -- '-----BEGIN PGP PRIVATE KEY BLOCK-----' <<<"${secret}"; then
+            if grep -q -- '-----BEGIN PGP PUBLIC KEY BLOCK-----' <<<"${secret}"; then
+              echo "::error::FLATPAK_GPG_PRIVATE_KEY holds the public key; it needs the private key (FLATPAK_GPG_PRIVATE_KEY.txt)."
+            elif grep -qi 'revocation' <<<"${secret}"; then
+              echo "::error::FLATPAK_GPG_PRIVATE_KEY holds the revocation certificate; it needs the private key (FLATPAK_GPG_PRIVATE_KEY.txt)."
+            elif decoded="$(base64 -d <<<"${secret}" 2>/dev/null)" && grep -q -- '-----BEGIN PGP PRIVATE KEY BLOCK-----' <<<"${decoded}"; then
+              secret="${decoded}" # saved base64-encoded; that works too
+            else
+              echo "::error::FLATPAK_GPG_PRIVATE_KEY is not a private key: paste the whole of FLATPAK_GPG_PRIVATE_KEY.txt, BEGIN and END lines included."
+            fi
+          fi
+          printf '%s\n' "${secret}" | gpg --batch --import
+          key=$(gpg --list-secret-keys --with-colons | awk -F: '/^fpr/ {print $10; exit}')
+          [[ -n "${key}" ]] || { echo "::error::No signing key could be read from FLATPAK_GPG_PRIVATE_KEY."; exit 1; }
+          bash packaging/flatpak/make-repo.sh flatpak "${key}" bundles/*.flatpak
+          tar czf flatpak-repo.tar.gz flatpak
+          gh release upload "${TAG}" flatpak-repo.tar.gz --clobber
+          gh workflow run pages.yml --ref main
 
   # The newest build of main as the "nightly" pre-release, which install.sh falls
   # back to while there is no release. Only the Linux AppImages: the installer's.

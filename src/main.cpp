@@ -5,13 +5,20 @@
 #include <QFileOpenEvent>
 #include <QLoggingCategory>
 #include <QMessageBox>
+#include <QSettings>
 #include <QTimer>
+#include <QLocale>
+#include <QLibraryInfo>
+#include <QTranslator>
 #include <QWebEngineProfile>
 
 #include <algorithm>
 #include <QWebEngineUrlScheme>
 #include "webenginecompat.h"
 
+#include "accessibility.h"
+#include "settingsversion.h"
+#include "spellcheck.h"
 #include "appwindow.h"
 #include "browserwindow.h"
 #include "classroom.h"
@@ -63,13 +70,32 @@ int main(int argc, char *argv[])
     // Fusion draws the same everywhere, which the chrome stylesheet relies on.
     QApplication::setStyle(spacepenguin::Theme::createStyle());
     QApplication::setWindowIcon(spacepenguin::Icons::appIcon());
+    // Every icon-only button gets a name screen readers can say.
+    spacepenguin::AccessibleNames::install();
     // Lets Wayland compositors and Linux docks match windows to the installed
     // launcher entry and its icon.
-    QGuiApplication::setDesktopFileName(QStringLiteral("org.spacepenguin.SpacePenguin"));
+    QGuiApplication::setDesktopFileName(QStringLiteral("io.github.developer1_vd.SpacePenguin"));
     QCoreApplication::setOrganizationName(QStringLiteral("SpacePenguin"));
     QCoreApplication::setOrganizationDomain(QStringLiteral("spacepenguin.invalid"));
     QCoreApplication::setApplicationName(QStringLiteral("SpacePenguin"));
     QCoreApplication::setApplicationVersion(QStringLiteral(SPACEPENGUIN_VERSION));
+    // The system's language: SpacePenguin's own words (translations/), else English
+    // with its plural forms, and Qt's dialogs (printing, opening files) where Qt
+    // has a translation installed.
+    static QTranslator qtTranslator;
+    if (qtTranslator.load(QLocale(), QStringLiteral("qtbase"), QStringLiteral("_"),
+                          QLibraryInfo::path(QLibraryInfo::TranslationsPath)))
+        QCoreApplication::installTranslator(&qtTranslator);
+    static QTranslator appTranslator;
+    if (appTranslator.load(QLocale(), QStringLiteral("spacepenguin"), QStringLiteral("_"), QStringLiteral(":/i18n"))
+        || appTranslator.load(QStringLiteral(":/i18n/spacepenguin_en")))
+        QCoreApplication::installTranslator(&appTranslator);
+    // Before anything reads them: bring the settings up to this build's layout.
+    {
+        QSettings settings;
+        if (spacepenguin::SettingsVersion::upgrade(settings) == spacepenguin::SettingsVersion::Outcome::Newer)
+            qWarning("These settings come from a newer SpacePenguin; some may be ignored.");
+    }
 
     QCommandLineParser parser;
     parser.setApplicationDescription(
@@ -129,6 +155,9 @@ int main(int argc, char *argv[])
     // A Tor window is a process of its own, whatever else is open (see tor.h).
     if (!torMode && instance.sendToRunningInstance(handOff))
         return 0;
+    // Spelling dictionaries, wherever this system keeps them, before the first page.
+    spacepenguin::SpellCheck::prepare(dataDirectory
+                                      + (torMode ? QStringLiteral("/dictionaries-tor") : QStringLiteral("/dictionaries")));
     if (torMode) {
         QString error;
         if (!spacepenguin::Tor::start(&error)) {
@@ -179,8 +208,7 @@ int main(int argc, char *argv[])
         spacepenguin::StartupTrace::mark("window built");
         window->show();
         QTimer::singleShot(0, [] { spacepenguin::StartupTrace::mark("window shown"); });
-        for (const QString &url : urls)
-            window->openInNewTab(url);
+        window->openPages(urls);
     }
 
     // Pages that arrive from outside go to the window in front, the way they do
@@ -202,8 +230,7 @@ int main(int argc, char *argv[])
         } else if (texts.isEmpty()) {
             target->openInNewTab(QString());
         } else {
-            for (const QString &text : std::as_const(texts))
-                target->openInNewTab(text);
+            target->openPages(texts);
         }
         if (target->isMinimized())
             target->showNormal();

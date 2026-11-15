@@ -22,6 +22,7 @@ once a version is tagged.
 | Windows | *SpacePenguin-Windows-X64* | run the `-setup.exe`, or unzip the portable zip |
 | macOS | *SpacePenguin-macOS-ARM64* (works on Intel Macs too) | open the DMG and drag SpacePenguin to Applications |
 | Linux | the installer below, or *SpacePenguin-Linux-X64* (or *-ARM64*) for the AppImage; *SpacePenguin-deb-…*, *-rpm-…*, *-pkg-…* for native packages | the installer, or `chmod +x` the AppImage and run it |
+| Linux, as a Flatpak | `SpacePenguin-x86_64.flatpak` (or `-aarch64`) from [Releases](https://github.com/developer1-vd/SpacePenguin/releases) | `flatpak install --user SpacePenguin-x86_64.flatpak` (it fetches the KDE runtime from Flathub), then open it from the app menu or `flatpak run io.github.developer1_vd.SpacePenguin` |
 | Android | *SpacePenguin-Android* | open the `.apk` on the phone (allow installing from your browser or files app) |
 | iPhone and iPad | *SpacePenguin-iOS* | install the `-ios-unsigned.ipa` with [Sideloadly](https://sideloadly.io) or [AltStore](https://altstore.io) and your Apple ID |
 
@@ -34,6 +35,32 @@ one extra step:
   *Open*, then *Open* again. On macOS 15 and later, if there is no *Open* button:
   try to open it once, then go to *System Settings › Privacy & Security* and click
   *Open Anyway*.
+
+### Flatpak, with updates
+
+SpacePenguin has its own Flatpak repository. One command adds it, with Flathub for
+the KDE runtime it runs on, and installs SpacePenguin:
+
+```sh
+flatpak install --user https://developer1-vd.github.io/SpacePenguin/flatpak/spacepenguin.flatpakref
+```
+
+After that, `flatpak update` (or GNOME Software, or KDE Discover) brings each new
+release. To add the repository on its own and install from it:
+
+```sh
+flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+flatpak remote-add --user --if-not-exists spacepenguin https://developer1-vd.github.io/SpacePenguin/flatpak/spacepenguin.flatpakrepo
+flatpak install --user spacepenguin io.github.developer1_vd.SpacePenguin
+```
+
+It holds the newest release, for x86-64 and ARM64, signed with the key in
+`packaging/flatpak/spacepenguin-repo-public.asc` (fingerprint
+`698F B4A4 78A8 8F69 41E9  CEDE 069C 8962 B15C D831`); Flatpak checks every update
+against it. To remove it: `flatpak uninstall io.github.developer1_vd.SpacePenguin`,
+then `flatpak remote-delete --user spacepenguin`.
+
+### Installer script
 
 On Linux, one command installs it for you, with an app-menu entry; run it again to
 update:
@@ -628,7 +655,7 @@ desktop.
 | Windows installer | *Settings › Apps › SpacePenguin › Uninstall*, or *Uninstall SpacePenguin* in the Start menu |
 | macOS DMG | drag SpacePenguin from Applications to the Bin |
 | `.deb` / `.rpm` / Arch | `sudo apt remove spacepenguin`, `sudo dnf remove spacepenguin`, `sudo pacman -R spacepenguin` |
-| Flatpak | `flatpak uninstall org.spacepenguin.SpacePenguin` |
+| Flatpak | `flatpak uninstall io.github.developer1_vd.SpacePenguin` |
 | Android, iPhone | as any app: touch and hold its icon, then remove it |
 
 Your bookmarks, history, saved logins and settings are kept, so installing again
@@ -777,7 +804,7 @@ it is on; CI builds them all and, for a `v*` tag, attaches them to a GitHub rele
 | Package | Command | Output | Runs on |
 | ------- | ------- | ------ | ------- |
 | AppImage | `./build-appimage.sh` | `SpacePenguin-<v>-x86_64.AppImage` (or `aarch64`) | any Linux distribution with glibc at least as new as the build machine's (CI: Ubuntu 22.04 and newer, Debian 12+, Fedora 36+, RHEL 9+) |
-| Flatpak | `flatpak-builder` with `packaging/flatpak/org.spacepenguin.SpacePenguin.yml` | `SpacePenguin.flatpak` | any distribution with Flatpak |
+| Flatpak | `flatpak-builder` with `packaging/flatpak/io.github.developer1_vd.SpacePenguin.yml` (the commands are at its top) | `SpacePenguin-x86_64.flatpak` and `-aarch64` | any distribution with Flatpak, x86-64 and ARM64, on the KDE 6.11 runtime |
 | `.deb` / `.rpm` | `./build-linux-packages.sh` | `spacepenguin_<v>_amd64.deb`, `spacepenguin-<v>-1.x86_64.rpm` | the distribution it was built on; needs that distribution's Qt 6.8+ (Debian 13, Ubuntu 26.04 LTS, Fedora 41, openSUSE Tumbleweed, …) |
 | Nix | `nix build` | `result/` (a Nix store path) | NixOS and any Linux or macOS with Nix |
 | Arch package | `makepkg -si` in `packaging/arch` | `spacepenguin-<v>-1-x86_64.pkg.tar.zst` | Arch, Manjaro, EndeavourOS, … |

@@ -53,6 +53,7 @@
 #include <QDir>
 #include <QDialogButtonBox>
 #include <QFileDialog>
+#include <QFileInfo>
 #include <QFocusEvent>
 #include <QGuiApplication>
 #include <QHBoxLayout>
@@ -70,7 +71,11 @@
 #include <QMenuBar>
 #include <QMessageBox>
 #include <QNetworkRequest>
+#include <QPageLayout>
+#include <QPageSize>
 #include <QPixmap>
+#include <QPrintDialog>
+#include <QPrinter>
 #include <QSignalBlocker>
 #include <QMouseEvent>
 #include <QPainter>
@@ -170,6 +175,9 @@ bool isStartPage(const QUrl &url)
 }
 
 const QUrl kStoreUrl(QStringLiteral("sp://store/"));
+
+// Set on a tab brought back from the last session until its page has loaded.
+constexpr char kRestoredProperty[] = "spacepenguin.restored";
 
 QToolButton *chromeButton(QAction *action, QWidget *parent = nullptr)
 {
@@ -397,6 +405,12 @@ BrowserWindow::~BrowserWindow()
     ServiceRegistry &shared = registry();
     if (m_tabBar)
         m_tabBar->disconnect(this);
+    // The tabs are deleted after this body, with the window's other widgets already
+    // gone: their destroyed() must not reach the prompt bar or the session timer.
+    for (int index = 0; m_tabBar && index < m_tabBar->count(); ++index) {
+        if (WebView *view = viewAt(index))
+            view->disconnect(this);
+    }
     if (m_isPrivate) {
         if (--shared.privateWindows <= 0 && shared.privateServices.profile == m_services.profile) {
             // Close the tabs first so no page outlives its profile.
@@ -535,6 +549,11 @@ void BrowserWindow::createActions()
     m_findAction = makeAction(tr("Find in Page…"), Shortcuts::keys(Shortcuts::Find), Icons::icon(Icons::Search));
     connect(m_findAction, &QAction::triggered, this, &BrowserWindow::showFindBar);
 
+    m_printAction = makeAction(tr("Print…"), Shortcuts::keys(Shortcuts::Print), Icons::icon(Icons::Printer));
+    connect(m_printAction, &QAction::triggered, this, &BrowserWindow::printPage);
+    m_pdfAction = makeAction(tr("Save Page as PDF…"));
+    connect(m_pdfAction, &QAction::triggered, this, &BrowserWindow::savePageAsPdf);
+
     m_zoomInAction = makeAction(tr("Zoom In"), Shortcuts::keys(Shortcuts::ZoomIn), Icons::icon(Icons::Plus));
     connect(m_zoomInAction, &QAction::triggered, this,
             [this] { setZoom(currentZoom() + kZoomStep); });
@@ -662,7 +681,7 @@ void BrowserWindow::createChrome()
     layout->addWidget(m_bookmarksBar);
 
     // Said plainly in every window: pages are running without Chromium's sandbox.
-    if (!Sandbox::isEnabled()) {
+    if (!Sandbox::isEnabled() && !Sandbox::isolatedByFlatpak()) {
         auto *banner = new QWidget;
         banner->setObjectName(QStringLiteral("sandboxBanner"));
         banner->setAttribute(Qt::WA_StyledBackground);
@@ -1115,6 +1134,8 @@ QMenu *BrowserWindow::createAppMenu()
     menu->addAction(zoomAction);
 
     menu->addAction(m_findAction);
+    menu->addAction(m_printAction);
+    menu->addAction(m_pdfAction);
     menu->addSeparator();
     menu->addAction(m_focusModeAction);
     menu->addAction(m_workPagesAction);
@@ -1191,6 +1212,9 @@ void BrowserWindow::createMenus()
     fileMenu->addAction(m_newTorWindowAction);
     fileMenu->addAction(m_reopenTabAction);
     fileMenu->addAction(m_openFileAction);
+    fileMenu->addSeparator();
+    fileMenu->addAction(m_pdfAction);
+    fileMenu->addAction(m_printAction);
     fileMenu->addSeparator();
     fileMenu->addAction(m_closeTabAction);
     fileMenu->addAction(m_closeWindowAction);
@@ -1733,13 +1757,11 @@ void BrowserWindow::restoreSession()
         restoreGeometry(geometry);
 
     const bool unclean = Session::markRunning(settings);
-    // Qt::UniqueConnection does not work with a lambda (Qt refuses the connection
-    // with "unique connections require a pointer to member function"), so the
-    // running flag was never cleared and every start reported an unclean close.
-    // Connect once per process instead.
-    static bool quitHooked = false;
-    if (!quitHooked) {
-        quitHooked = true;
+    // Once per run. (Qt::UniqueConnection does not work with a lambda: it refuses the
+    // connection, and every start would then look like a crash.)
+    static bool closingWatched = false;
+    if (!closingWatched) {
+        closingWatched = true;
         const auto markClosed = [] {
             QSettings settings;
             Session::markClosed(settings);
@@ -1788,6 +1810,8 @@ bool BrowserWindow::restoreTabs(const QString &group)
     const int offset = m_tabBar->count();
     for (int index = 0; index < saved.urls.size(); ++index) {
         WebView *view = addTab(false);
+        // Bringing a tab back is not a visit: history keeps its count and time.
+        view->setProperty(kRestoredProperty, true);
         const QByteArray &history = saved.histories.at(index);
         if (!history.isEmpty()) {
             QDataStream stream(history);
@@ -1947,6 +1971,18 @@ void BrowserWindow::openInNewTab(const QString &text)
     newTab(m_resolver.resolve(text));
 }
 
+void BrowserWindow::openPages(const QStringList &texts)
+{
+    if (texts.isEmpty())
+        return;
+    const WebView *only = m_tabBar->count() == 1 ? viewAt(0) : nullptr;
+    const bool onlyStartTab = only && (only->url().isEmpty() || isStartPage(only->url()));
+    for (const QString &text : texts)
+        openInNewTab(text);
+    if (onlyStartTab)
+        closeTab(0);
+}
+
 BrowserWindow *BrowserWindow::openWindow(bool isPrivate, const QStringList &texts)
 {
     BrowserWindow *window = newWindow(isPrivate);
@@ -2036,8 +2072,28 @@ void BrowserWindow::closeOtherTabs(int index)
 
 void BrowserWindow::duplicateTab(int index)
 {
-    if (WebView *view = viewAt(index))
-        newTab(view->url());
+    WebView *view = viewAt(index);
+    if (!view)
+        return;
+    // Beside the original, in its group, with its back and forward history.
+    QByteArray history;
+    {
+        QDataStream out(&history, QIODevice::WriteOnly);
+        out << *view->history();
+    }
+    WebView *copy = addTab(false);
+    QDataStream in(history);
+    in >> *copy->history();
+    if (in.status() != QDataStream::Ok || copy->history()->count() == 0)
+        loadUrl(copy, view->url());
+    const int from = indexOfView(copy);
+    const int to = qMin(indexOfView(view) + 1, m_tabBar->count() - 1);
+    if (from >= 0 && from != to)
+        m_tabBar->moveTab(from, to);
+    if (const int group = m_groups->groupOf(view))
+        m_groups->setGroupOf(copy, group);
+    m_groups->arrange(m_tabBar);
+    refreshGroups();
 }
 
 void BrowserWindow::reopenClosedTab()
@@ -2369,6 +2425,9 @@ void BrowserWindow::showLoginsMenu()
                                        login.username.isEmpty() ? tr("(no username)") : login.username);
         connect(fill, &QAction::triggered, this, [this, view, login] {
             if (!m_tabBar || indexOfView(view) < 0)
+                return;
+            // The page may have gone to another site while the menu was open.
+            if (LoginStore::originOf(view->url()) != login.origin)
                 return;
             // Into the page's sign-in form, from the same isolated world the capture runs in.
             view->page()->runJavaScript(LoginStore::fillScript(login.username, login.password),
@@ -3089,6 +3148,55 @@ void BrowserWindow::updateZoomIndicator()
 
 // ---- Find ---------------------------------------------------------------------
 
+void BrowserWindow::printPage()
+{
+    WebView *view = currentView();
+    if (!view)
+        return;
+    // The printer lives until Chromium has laid out and sent every page.
+    auto *printer = new QPrinter(QPrinter::HighResolution);
+    printer->setDocName(view->title());
+    QPrintDialog dialog(printer, this);
+    dialog.setWindowTitle(tr("Print “%1”").arg(view->title()));
+    if (dialog.exec() != QDialog::Accepted) {
+        delete printer;
+        return;
+    }
+    connect(view, &QWebEngineView::printFinished, this, [this, printer](bool ok) {
+        if (!ok)
+            showToast(tr("The page could not be printed."), 5000);
+        delete printer;
+    }, Qt::SingleShotConnection);
+    view->print(printer);
+}
+
+void BrowserWindow::savePageAsPdf()
+{
+    WebView *view = currentView();
+    if (!view)
+        return;
+    QString name = view->title().trimmed();
+    name.replace(QRegularExpression(QStringLiteral(R"([\\/:*?"<>|\x00-\x1f]+)")), QStringLiteral(" "));
+    if (name.isEmpty())
+        name = tr("Page");
+    const QString suggested = QDir(Preferences::instance()->downloadDirectory()).filePath(name.left(120) + QStringLiteral(".pdf"));
+    QString path = QFileDialog::getSaveFileName(this, tr("Save Page as PDF"), suggested, tr("PDF documents (*.pdf)"));
+    if (path.isEmpty())
+        return;
+    if (!path.endsWith(QLatin1String(".pdf"), Qt::CaseInsensitive))
+        path += QStringLiteral(".pdf");
+    // A4 or Letter, whichever the person's country uses.
+    const QPageSize size(QLocale().measurementSystem() == QLocale::ImperialUSSystem ? QPageSize::Letter
+                                                                                      : QPageSize::A4);
+    const QPageLayout layout(size, QPageLayout::Portrait, QMarginsF(12, 12, 12, 12), QPageLayout::Millimeter);
+    connect(view->page(), &QWebEnginePage::pdfPrintingFinished, this,
+            [this](const QString &file, bool ok) {
+                showToast(ok ? tr("Saved “%1”.").arg(QFileInfo(file).fileName())
+                             : tr("The PDF could not be saved."), 5000);
+            }, Qt::SingleShotConnection);
+    view->page()->printToPdf(path, layout);
+}
+
 void BrowserWindow::showFindBar()
 {
     m_findBar->show();
@@ -3523,7 +3631,9 @@ void BrowserWindow::onLoadProgress(WebView *view, int progress)
 
 void BrowserWindow::onLoadFinished(WebView *view, bool ok)
 {
-    if (ok && !m_isPrivate && m_services.historyManager && isWebScheme(view->url()))
+    const bool restored = view->property(kRestoredProperty).toBool();
+    view->setProperty(kRestoredProperty, QVariant());
+    if (ok && !restored && !m_isPrivate && m_services.historyManager && isWebScheme(view->url()))
         m_services.historyManager->addVisit(view->url(), view->title());
 
     updateTabLabel(view);
