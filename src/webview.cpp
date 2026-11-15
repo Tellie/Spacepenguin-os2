@@ -1,11 +1,13 @@
 #include "webview.h"
 
 #include "browserpage.h"
+#include "externalplayer.h"
 #include "preferences.h"
 #include "roles.h"
 
 #include <QContextMenuEvent>
 #include <QMenu>
+#include <QWebEngineContextMenuRequest>
 #include <QTimer>
 
 namespace spacepenguin {
@@ -35,6 +37,29 @@ void WebView::contextMenuEvent(QContextMenuEvent *event)
     menu->setAttribute(Qt::WA_DeleteOnClose);
     // Qt's own Inspect needs developer tools already attached; the window attaches them.
     menu->removeAction(pageAction(QWebEnginePage::InspectElement));
+#ifdef __OS2__
+    // Video does not play in this QtWebEngine (OS/2), so hand YouTube to an
+    // outside player: yt-dlp into VLC by default (ExternalPlayer).
+    QUrl video;
+    if (QWebEngineContextMenuRequest *request = lastContextMenuRequest()) {
+        if (ExternalPlayer::canPlay(request->linkUrl()))
+            video = request->linkUrl();
+    }
+    if (video.isEmpty() && ExternalPlayer::canPlay(url()))
+        video = url();
+    if (!video.isEmpty()) {
+        QAction *first = menu->actions().value(0);
+        QAction *play = new QAction(tr("Play in external player"), menu);
+        connect(play, &QAction::triggered, this, [this, video] {
+            if (!ExternalPlayer::play(video))
+                qWarning("SpacePenguin: could not start the external player");
+            else if (video == url())
+                triggerPageAction(QWebEnginePage::Stop); // and stop the page's own player trying
+        });
+        menu->insertAction(first, play);
+        menu->insertSeparator(first);
+    }
+#endif
     if (Preferences::instance()->hasRole(Roles::key(Roles::Role::Developer))) {
         menu->addSeparator();
         QAction *inspect = menu->addAction(tr("Inspect"));

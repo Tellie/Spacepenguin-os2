@@ -134,6 +134,7 @@ qt_add_executable(spacepenguin
     src/httpsonly.cpp
     src/httpsonly.h
     src/webview.cpp
+    src/externalplayer.cpp
     src/webview.h
     src/startuptrace.cpp
     src/startuptrace.h
