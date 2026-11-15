@@ -301,6 +301,47 @@ inline QString polyfillScript()
       self.Worker = PatchedWorker;
     }
 
+    // --- fetch() on SpacePenguin's own sp:// pages ------------------------------
+    // QtWebEngine 6.2 cannot allow fetch() on a custom scheme (FetchApiAllowed is
+    // Qt 6.6), so pages like sp://logins got "Failed to fetch". XMLHttpRequest
+    // does work there; it also cannot pass a request body to the browser (that
+    // needs Qt 6.7), so a body travels in the '__body' query parameter instead.
+    if (location.protocol === 'sp:' && typeof XMLHttpRequest === 'function') {
+      var nativeFetch = window.fetch;
+      window.fetch = function (input, init) {
+        var target;
+        try { target = new URL(typeof input === 'string' ? input : input.url, location.href); }
+        catch (e) { return nativeFetch.apply(this, arguments); }
+        if (target.protocol !== 'sp:') return nativeFetch.apply(this, arguments);
+        init = init || {};
+        return new Promise(function (resolve, reject) {
+          if (init.body !== undefined && init.body !== null)
+            target.searchParams.set('__body', String(init.body));
+          var xhr = new XMLHttpRequest();
+          xhr.open(init.method || 'GET', target.href);
+          var headers = init.headers || {};
+          if (typeof Headers === 'function' && headers instanceof Headers)
+            headers.forEach(function (value, name) { xhr.setRequestHeader(name, value); });
+          else
+            Object.keys(headers).forEach(function (name) { xhr.setRequestHeader(name, headers[name]); });
+          xhr.responseType = 'arraybuffer';
+          xhr.onload = function () {
+            var out = new Headers();
+            xhr.getAllResponseHeaders().trim().split(/\r?\n/).forEach(function (line) {
+              var i = line.indexOf(':');
+              if (i > 0) out.append(line.slice(0, i).trim(), line.slice(i + 1).trim());
+            });
+            var status = xhr.status || 200;
+            var nullBody = status === 101 || status === 204 || status === 205 || status === 304;
+            resolve(new Response(nullBody ? null : xhr.response,
+                                 { status: status, statusText: xhr.statusText, headers: out }));
+          };
+          xhr.onerror = function () { reject(new TypeError('Failed to fetch')); };
+          xhr.send(null);
+        });
+      };
+    }
+
     // --- CSS cascade layers (Chromium 99) ---------------------------------------
     // Chromium 94 drops '@layer x { ... }' blocks completely. Sites whose CSS is
     // in layers (GitHub's Primer) then show up without any styling. Load such

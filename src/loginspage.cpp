@@ -7,6 +7,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QUrlQuery>
 #include <QWebEngineUrlRequestJob>
 #include "webenginecompat.h"
 
@@ -31,6 +32,14 @@ void replyJson(QWebEngineUrlRequestJob *job, const QJsonValue &value)
 QJsonObject body(QWebEngineUrlRequestJob *job)
 {
     QIODevice *device = spcompat::requestBody(job);
+#if !SPACEPENGUIN_NEW_WEBENGINE_API
+    // Older QtWebEngine passes no request body: the page's fetch() stand-in
+    // (webenginepolyfills.h) sends it in the '__body' query parameter.
+    if (!device) {
+        const QString text = QUrlQuery(job->requestUrl()).queryItemValue(QStringLiteral("__body"), QUrl::FullyDecoded);
+        return QJsonDocument::fromJson(text.left(64 * 1024).toUtf8()).object();
+    }
+#endif
     if (!device)
         return {};
     if (!device->isOpen())
