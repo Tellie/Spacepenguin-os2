@@ -106,7 +106,10 @@ DeviceTuning::Plan DeviceTuning::plan(const Facts &facts)
     // in. LIBCx can only pass sockets between processes, so the page process
     // never gets the file and the empty .org.chromium.Chromium.* files pile up
     // in the temp folder.
-    wanted << QStringLiteral("--disable-features=ParkableStringsToDisk");
+    // Also no spare page process: Chromium starts one ahead of time and ends it
+    // again with SIGTERM when it is not used; on OS/2 page processes started
+    // around such a kill are seen to die as well.
+    wanted << QStringLiteral("--disable-features=ParkableStringsToDisk,SpareRendererForSitePerProcess");
 #endif
 
     // Whatever the user passed wins: skip any switch they set themselves.
