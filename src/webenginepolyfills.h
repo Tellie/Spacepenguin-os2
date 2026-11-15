@@ -294,7 +294,19 @@ inline QString polyfillScript()
         // compresses it in a worker: constant CPU load on this machine. Without
         // its worker Datadog switches itself off ("failed to start").
         if (/datadog-worker/.test(target)) throw new DOMException('Datadog worker disabled', 'SecurityError');
-        return new OrigWorker(target, options);
+        var worker = new OrigWorker(target, options);
+        // GitHub now bundles the same Datadog worker under another name
+        // (chunk-*.js). It is recognised by its first message, a bare
+        // {action: 'init'}: leaving that unanswered makes Datadog give up
+        // ("timeout initializing the Worker") instead of recording the page.
+        var post = worker.postMessage;
+        worker.postMessage = function (message) {
+          if (message && typeof message === 'object' && message.action === 'init'
+              && Object.keys(message).length === 1)
+            return undefined;
+          return post.apply(worker, arguments);
+        };
+        return worker;
       };
       PatchedWorker.prototype = OrigWorker.prototype;
       Object.setPrototypeOf(PatchedWorker, OrigWorker);
