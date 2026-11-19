@@ -283,7 +283,15 @@ inline QString polyfillScript()
     // a secure context. Each call is a round trip to another thread, which on
     // this QtWebEngine gives well under 1k hashes per second. Its pure-JS worker,
     // which Anubis itself uses on Firefox, is much faster here.
-    if (typeof Worker === 'function') {
+    // Only where it is needed: a changed Worker constructor is something bot
+    // checks look for. Cloudflare's Turnstile (e.g. sourceforge.net) then says
+    // "Browser not supported". So: on GitHub (Datadog), and on pages that turn
+    // out to be an Anubis check (its script tag is seen before it runs).
+    var workerPatched = false;
+    var installWorkerPatch = function () {
+    if (workerPatched || typeof Worker !== 'function') return;
+    workerPatched = true;
+    {
       var OrigWorker = Worker;
       var anubisWebCrypto = /(\/\.within\.website\/x\/cmd\/anubis\/static\/js\/worker\/sha256-)webcrypto(\.mjs)/;
       var PatchedWorker = function Worker(url, options) {
@@ -311,6 +319,26 @@ inline QString polyfillScript()
       PatchedWorker.prototype = OrigWorker.prototype;
       Object.setPrototypeOf(PatchedWorker, OrigWorker);
       self.Worker = PatchedWorker;
+    }
+    };
+    if (/(^|\.)github\.com$/.test(location.hostname)) {
+      installWorkerPatch();
+    } else if (typeof MutationObserver === 'function') {
+      var anubisMarker = function (node) {
+        if (!node || node.nodeName !== 'SCRIPT') return false;
+        return node.id === 'anubis_challenge' || node.id === 'anubis_version'
+          || /\/\.within\.website\//.test(node.src || '');
+      };
+      var watcher = new MutationObserver(function (records) {
+        for (var i = 0; i < records.length; ++i) {
+          var added = records[i].addedNodes;
+          for (var j = 0; j < added.length; ++j) {
+            if (anubisMarker(added[j])) { installWorkerPatch(); watcher.disconnect(); return; }
+          }
+        }
+      });
+      watcher.observe(document, {childList: true, subtree: true});
+      document.addEventListener('DOMContentLoaded', function () { watcher.disconnect(); });
     }
 
     // --- fetch() on SpacePenguin's own sp:// pages ------------------------------
