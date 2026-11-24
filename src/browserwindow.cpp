@@ -20,6 +20,7 @@
 #include "cookiemanager.h"
 #include "datasavermanager.h"
 #include "downloadmanager.h"
+#include "externalapps.h"
 #include "downloadsdialog.h"
 #include "extensionsdialog.h"
 #include "historydialog.h"
@@ -46,17 +47,17 @@
 #include <QAction>
 #include <QActionGroup>
 #include <QApplication>
+#include <QClipboard>
 #include <QCloseEvent>
 #include <QCompleter>
-#include <QClipboard>
 #include <QCursor>
 #include <QDataStream>
 #include <QDateTime>
+#include <QDesktopServices>
 #include <QDialog>
-#include <QPointer>
-#include <QFile>
-#include <QDir>
 #include <QDialogButtonBox>
+#include <QDir>
+#include <QFile>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QFocusEvent>
@@ -75,26 +76,29 @@
 #include <QMenu>
 #include <QMenuBar>
 #include <QMessageBox>
+#include <QMouseEvent>
+#include <QNetworkAccessManager>
+#include <QNetworkReply>
 #include <QNetworkRequest>
 #include <QPageLayout>
 #include <QPageSize>
+#include <QPainter>
 #include <QPixmap>
+#include <QPointer>
 #include <QPrintDialog>
 #include <QPrinter>
-#include <QSignalBlocker>
-#include <QMouseEvent>
-#include <QPainter>
-#include <QNetworkAccessManager>
-#include <QNetworkReply>
+#include <QProcess>
 #include <QProgressBar>
-#include <QRegularExpression>
 #include <QPushButton>
+#include <QRegularExpression>
 #include <QSet>
 #include <QSettings>
 #include <QShortcut>
+#include <QSignalBlocker>
 #include <QSplitter>
 #include <QStackedWidget>
 #include <QStandardItemModel>
+#include <QStandardPaths>
 #include <QStyle>
 #include <QTimer>
 #include <QToolBar>
@@ -105,12 +109,11 @@
 #include <QWebEngineFullScreenRequest>
 #include <QWebEngineHistory>
 #include <QWebEnginePage>
-#include <QWebEngineView>
 #include "webenginecompat.h"
 #include <QWebEngineProfile>
 #include <QWebEngineScript>
-#include <QWebEngineProfile>
 #include <QWebEngineSettings>
+#include <QWebEngineView>
 #include <QWidgetAction>
 
 #include <algorithm>
@@ -304,6 +307,14 @@ BrowserWindow::BrowserWindow(ProfileServices services, QWidget *parent)
                     m_downloadsButton->setToolTip(
                         tr("Downloading %1 — click to see downloads").arg(item.suggestedFileName));
                     showToast(tr("Downloading “%1”…").arg(item.suggestedFileName), 3000);
+                });
+        // Flathub's Install button downloads a .flatpakref: offer to install it.
+        connect(m_services.downloadManager, &DownloadManager::downloadFinished, this,
+                [this](const DownloadItem &item) {
+                    // Once, in the window in front: every window of the profile hears it.
+                    if (item.state == DownloadItem::Completed && ExternalApps::isFlatpakRef(item.filePath)
+                        && frontWindow() == this)
+                        offerFlatpakInstall(item.filePath);
                 });
     }
 
@@ -762,6 +773,9 @@ void BrowserWindow::createChrome()
 
     m_linkPreview = new QLabel(content);
     m_linkPreview->setObjectName(QStringLiteral("linkPreview"));
+    // Hovered link addresses and toasts carry what pages chose (file names, links):
+    // shown as text, never as markup.
+    m_linkPreview->setTextFormat(Qt::PlainText);
     m_linkPreview->setAttribute(Qt::WA_TransparentForMouseEvents);
     m_linkPreview->hide();
 
@@ -2636,6 +2650,109 @@ void BrowserWindow::showExtensionPopup(const QUrl &url)
     popup->show();
 }
 
+void BrowserWindow::offerAppLink(WebView *view, const QUrl &url, bool typed, bool fromFrame)
+{
+    const QString scheme = url.scheme().toLower();
+    if (!ExternalApps::hasHandler(scheme)) {
+        Prompt prompt;
+        prompt.key = QStringLiteral("app-link");
+        prompt.icon = Icons::Info;
+        if (ExternalApps::isRoblox(scheme)) {
+            // Roblox has no Linux app of its own; Sober runs it.
+            prompt.text = tr("To play Roblox on Linux, install <b>Sober</b>, a free app that runs Roblox. "
+                             "Then press Play again.");
+            prompt.buttons = {{tr("Get Sober"), [this] { openInNewTab(ExternalApps::soberPage().toString()); }}};
+        } else {
+            prompt.text = tr("No app on this computer opens <b>%1:</b> links.").arg(scheme.toHtmlEscaped());
+        }
+        addPrompt(view, prompt);
+        return;
+    }
+    const QString app = ExternalApps::appName(scheme);
+    const auto launch = [this, url, app] {
+        if (ExternalApps::open(url))
+            showToast(tr("Opening %1…").arg(app), 3000);
+        else
+            showToast(tr("%1 could not be opened.").arg(app), 5000);
+    };
+    // Remembered sites only in normal windows: private and Tor windows keep nothing.
+    const bool remember = !m_isPrivate && !Tor::isActive();
+    const QString site = ExternalApps::siteOf(view->url());
+    // "Always Open" is for the site's own page: a frame in it (an ad, say) asks.
+    if (typed || (remember && !fromFrame && ExternalApps::isAlwaysAllowed(site, scheme))) {
+        launch();
+        return;
+    }
+    Prompt prompt;
+    prompt.key = QStringLiteral("app-link");
+    prompt.icon = Icons::Open;
+    prompt.text = site.isEmpty()
+        ? tr("This page wants to open <b>%1</b>.").arg(app.toHtmlEscaped())
+        : tr("<b>%1</b> wants to open <b>%2</b>.").arg(site.toHtmlEscaped(), app.toHtmlEscaped());
+    prompt.buttons = {{tr("Open"), launch}};
+    if (remember && !site.isEmpty()) {
+        prompt.buttons.append({tr("Always Open"), [site, scheme, launch] {
+                                   ExternalApps::setAlwaysAllowed(site, scheme);
+                                   launch();
+                               }});
+    }
+    addPrompt(view, prompt);
+}
+
+void BrowserWindow::offerFlatpakInstall(const QString &path)
+{
+    QFile file(path);
+    const ExternalApps::FlatpakRef ref = file.open(QIODevice::ReadOnly) ? ExternalApps::parseFlatpakRef(file.read(64 * 1024))
+                                                                         : ExternalApps::FlatpakRef();
+    WebView *view = currentView();
+    if (!view)
+        return;
+    if (!ref.isValid()) {
+        showToast(tr("“%1” is not a Flatpak app that can be installed.").arg(QFileInfo(path).fileName()), 5000);
+        return;
+    }
+    const QString name = ref.title.isEmpty() ? ref.name : ref.title;
+    Prompt prompt;
+    prompt.key = QStringLiteral("flatpak");
+    prompt.icon = Icons::Download;
+    prompt.text = tr("Install <b>%1</b> (%2) from <b>%3</b>?")
+                      .arg(name.toHtmlEscaped(), ref.name.toHtmlEscaped(), ref.repository.host().toHtmlEscaped());
+    prompt.buttons = {{tr("Install"), [this, path, name] {
+        if (!ExternalApps::canInstallFlatpaks()) {
+            // Inside the Flatpak, or with no flatpak command: the software centre does it.
+            QDesktopServices::openUrl(QUrl::fromLocalFile(path));
+            showToast(tr("Opening %1 in your software centre…").arg(name), 5000);
+            return;
+        }
+        // For this user only, so no administrator password; Flatpak checks the
+        // repository's signature itself.
+        auto *process = new QProcess(this);
+        process->setProcessChannelMode(QProcess::MergedChannels);
+        connect(process, &QProcess::finished, this, [this, process, name](int code, QProcess::ExitStatus status) {
+            process->deleteLater();
+            if (status == QProcess::NormalExit && code == 0) {
+                showToast(tr("%1 is installed. Open it from your app menu.").arg(name), 8000);
+                return;
+            }
+            QStringList lines = QString::fromUtf8(process->readAll()).split(QLatin1Char('\n'), Qt::SkipEmptyParts);
+            const QString why = lines.isEmpty() ? QString() : lines.constLast().trimmed();
+            showToast(why.isEmpty() ? tr("%1 could not be installed.").arg(name)
+                                    : tr("%1 could not be installed: %2").arg(name, why), 10000);
+        });
+        connect(process, &QProcess::errorOccurred, this, [this, process, name](QProcess::ProcessError error) {
+            if (error != QProcess::FailedToStart)
+                return;
+            process->deleteLater();
+            showToast(tr("%1 could not be installed: Flatpak did not start.").arg(name), 8000);
+        });
+        process->start(QStandardPaths::findExecutable(QStringLiteral("flatpak")),
+                       {QStringLiteral("install"), QStringLiteral("--user"), QStringLiteral("--noninteractive"),
+                        QStringLiteral("-y"), QStringLiteral("--from"), path});
+        showToast(tr("Installing %1… This can take a few minutes.").arg(name), 8000);
+    }}};
+    addPrompt(view, prompt);
+}
+
 void BrowserWindow::offerUserScript(WebView *view, const QUrl &url, bool quiet)
 {
     UserScripts *scripts = m_services.userScripts;
@@ -3646,6 +3763,8 @@ void BrowserWindow::connectView(WebView *view)
                            }}};
         addPrompt(view, prompt);
     });
+    connect(view->browserPage(), &BrowserPage::appLinkRequested, this,
+            [this, view](const QUrl &url, bool typed, bool fromFrame) { offerAppLink(view, url, typed, fromFrame); });
     connect(view->browserPage(), &BrowserPage::loginSubmitted, this,
             [this, view](const QString &username, const QString &password) {
                 offerToSaveLogin(view, username, password);
@@ -4275,10 +4394,25 @@ void BrowserWindow::enterPictureInPicture(WebView *view)
     m_pipWindow = window;
     window->show();
 
-    // The marked video fills the window, the way it would fill the screen.
-    view->page()->runJavaScript(
-        QStringLiteral("document.querySelector('[data-spacepenguin-pip]')?.requestFullscreen().catch(() => {})"),
-        QWebEngineScript::ApplicationWorld);
+    // The marked video fills the window, the way it would fill the screen. Chromium
+    // allows that only just after a click in the page, so from the keyboard shortcut
+    // or the menu it is refused; the video is then stretched over the page instead.
+    static const QString fillWindow = QStringLiteral(R"JS((() => {
+        const video = document.querySelector('[data-spacepenguin-pip]');
+        if (!video) return;
+        const stretch = () => {
+            if (document.getElementById('spacepenguin-pip-style')) return;
+            const style = document.createElement('style');
+            style.id = 'spacepenguin-pip-style';
+            style.textContent = '[data-spacepenguin-pip]{position:fixed!important;inset:0!important;'
+                + 'width:100vw!important;height:100vh!important;max-width:none!important;max-height:none!important;'
+                + 'margin:0!important;border-radius:0!important;z-index:2147483647!important;'
+                + 'background:#000!important;object-fit:contain!important}html,body{overflow:hidden!important}';
+            document.documentElement.appendChild(style);
+        };
+        video.requestFullscreen().catch(stretch);
+    })())JS");
+    view->page()->runJavaScript(fillWindow, QWebEngineScript::ApplicationWorld);
     m_pipAction->setText(tr("Leave Picture-in-Picture"));
 }
 
@@ -4289,6 +4423,8 @@ void BrowserWindow::exitPictureInPicture()
     m_pipAction->setText(tr("Picture-in-Picture"));
     if (view) {
         view->page()->triggerAction(QWebEnginePage::ExitFullScreen);
+        view->page()->runJavaScript(QStringLiteral("document.getElementById('spacepenguin-pip-style')?.remove()"),
+                                    QWebEngineScript::ApplicationWorld);
         const int at = m_pipPlaceholder ? m_stack->indexOf(m_pipPlaceholder) : m_stack->count();
         view->setParent(nullptr);
         m_stack->insertWidget(at, view);

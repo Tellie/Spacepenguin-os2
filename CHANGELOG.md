@@ -7,6 +7,25 @@ follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.0.0-rc.7] - 2026-11-24
+
+### Added
+
+- A setup wizard on a new install's first start: the search engine, light or dark and the colour, privacy (ad blocking, HTTPS-only, tracking in links, sponsor segments, saving logins), what SpacePenguin is for, and bookmarks from another browser. Existing installs never see it.
+- Apps open from links: "Open in app" buttons, Roblox's *Play*, and sign-in pages that send you back to an app (Discord, Zoom, Teams, Slack, Spotify, VS Code, mailto: and others) now open the app, after a bar asks; *Always Open* remembers the site and app (not in private or Tor windows). Links that run programs or open local files are never opened.
+- Roblox on Linux: when nothing on the computer opens Roblox's links, SpacePenguin points to Sober on Flathub.
+- Flatpak apps install from the browser: a .flatpakref downloaded from Flathub's Install button is offered for installing right away, for your user only, so no password is needed. Inside the Flatpak, your software centre installs it.
+
+## [1.0.0-rc.6] - 2026-11-23
+
+### Fixed
+
+- Picture-in-Picture started from Ctrl+Alt+P or the menu showed the whole page in its small window instead of the video: Chromium allows a video to go full screen only just after a click in the page. The video now fills the window either way.
+
+### Added
+
+- A 40-second trailer on the website, with music written for it (`tools/trailer/music.py`).
+
 ## [1.0.0-rc.5] - 2026-11-20
 
 ### Fixed
@@ -109,7 +128,9 @@ their store, sites installed as apps, saved logins (about:logins), crash
 recovery, roles for developers, gamers, students, workers and teachers, and
 packages for Windows, macOS, Linux, the BSDs, Chromebooks, Android and iPhone.
 
-[Unreleased]: https://github.com/developer1-vd/SpacePenguin/compare/v1.0.0-rc.5...HEAD
+[Unreleased]: https://github.com/developer1-vd/SpacePenguin/compare/v1.0.0-rc.7...HEAD
+[1.0.0-rc.7]: https://github.com/developer1-vd/SpacePenguin/compare/v1.0.0-rc.6...v1.0.0-rc.7
+[1.0.0-rc.6]: https://github.com/developer1-vd/SpacePenguin/compare/v1.0.0-rc.5...v1.0.0-rc.6
 [1.0.0-rc.5]: https://github.com/developer1-vd/SpacePenguin/compare/v1.0.0-rc.4...v1.0.0-rc.5
 [1.0.0-rc.4]: https://github.com/developer1-vd/SpacePenguin/compare/v1.0.0-rc.3...v1.0.0-rc.4
 [1.0.0-rc.3]: https://github.com/developer1-vd/SpacePenguin/compare/v1.0.0-rc.2...v1.0.0-rc.3

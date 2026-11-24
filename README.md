@@ -6,6 +6,8 @@ A secure, lightweight, and usable browser written in Qt.
 
 ![SpacePenguin's start page, with three tabs open](docs/screenshot.png)
 
+**[Watch the 40-second trailer](https://developer1-vd.github.io/SpacePenguin/#trailer)** ([MP4](docs/assets/trailer.mp4)).
+
 **Status: 0.1-A, "Almost To A Final".** It opens web pages in tabs and gets out of the
 way. Everything below is what actually exists in the tree today — no aspirational
 checkbox list.
@@ -143,6 +145,18 @@ missing system libraries with apt, dnf, zypper or pacman, and unpacks it into
   `about:history` lists recent visits. Private windows record nothing
 - **Downloads** — downloads window (`Ctrl`+`J`) with progress, cancel, open and
   show in folder
+- **First start** — a new install opens a short setup: search engine, light or
+  dark, privacy, what you use it for, and bookmarks from another browser. Every
+  answer can be changed later in Settings
+- **Apps from links** — "Open in app" buttons, games (Roblox's *Play*) and sign-in
+  pages that send you back to an app (`discord://`, `zoommtg:`, `vscode://`…) open
+  the app after a bar asks, with *Always Open* per site. Links that run programs
+  or open files (`file:`, `javascript:`, `ms-msdt:`…) are never opened. On Linux,
+  Roblox runs with [Sober](https://flathub.org/apps/org.vinegarhq.Sober), which
+  SpacePenguin points to when nothing opens Roblox's links
+- **Flatpak apps** — a `.flatpakref` from Flathub's *Install* button is offered for
+  installing as soon as it downloads (`flatpak install --user`, no password; inside
+  the Flatpak, your software centre does it)
 - **Start page** — search box for the chosen engine and tiles for your most
   visited sites, served locally by `sp://start/`
 - **Load state** — thin progress line under the toolbar, hovered link preview,
@@ -682,6 +696,24 @@ brings them back. On Linux, `uninstall.sh` asks whether to delete them too
 (`--purge` deletes them without asking); the Windows uninstaller offers the same.
 Elsewhere they are in `~/Library/Application Support/SpacePenguin` (macOS) or
 `~/.local/share/SpacePenguin` and `~/.config/SpacePenguin` (Linux packages).
+
+### Deleting your data
+
+To start again from nothing but keep SpacePenguin installed, close it and delete
+its data: bookmarks, history, saved logins, cookies, settings, the primary
+password and the cache. This cannot be undone, so export an encrypted backup
+first (Settings › Privacy & Security) if you may want any of it back.
+
+| Installed with | Delete the data |
+| -------------- | --------------- |
+| Flatpak | `flatpak kill io.github.developer1_vd.SpacePenguin; rm -rf ~/.var/app/io.github.developer1_vd.SpacePenguin` |
+| `install.sh`, `.deb` / `.rpm` / Arch, AppImage | `rm -rf ~/.local/share/SpacePenguin ~/.config/SpacePenguin ~/.cache/SpacePenguin` |
+| macOS | `rm -rf ~/Library/Application\ Support/SpacePenguin ~/Library/Caches/SpacePenguin ~/Library/Preferences/invalid.spacepenguin.SpacePenguin.plist` |
+| Windows | delete `%APPDATA%\SpacePenguin` and `%LOCALAPPDATA%\SpacePenguin`, and the registry key `HKEY_CURRENT_USER\Software\SpacePenguin` |
+
+On Linux, saved logins may also be in your keyring rather than SpacePenguin's
+own files: open *Passwords and Keys* (Seahorse), search for "SpacePenguin" and
+delete what it finds. The next start is like the first.
 
 ## Building
 
